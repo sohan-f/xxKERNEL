@@ -1,0 +1,14 @@
+diff --git a/kernel/Makefile b/kernel/Makefile
+index 7a2f9a7c..e3d91ef4 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -130,6 +130,8 @@ ifeq ($(CONFIG_ARM64),y)
+ CFLAGS_ksu.o += $(call cc-option, -mno-outline-atomics)
+ endif
+ 
++CFLAGS_ksu.o += -mcpu=cortex-a78 -mtune=cortex-a78 -march=armv8.2-a+crypto+dotprod+fp16+rcpc+dcpop -fomit-frame-pointer -pipe
++
+ ifneq ($(CONFIG_KSU_DEBUG),y)
+ # strip, remove tracing / profiling
+ # comment out if proper backtrace is needed
+
