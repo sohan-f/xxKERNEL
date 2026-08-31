@@ -69,7 +69,6 @@ jobs:
     env:
       # Device CPU: 4x Cortex-A55 (LITTLE) + 4x Cortex-A78 (big), ARMv8.2-a
       TARGET_CPU: "cortex-a78"
-      TARGET_MARCH: "armv8.2-a+crypto+dotprod+fp16+rcpc+dcpop"
 
     steps:
       - name: Build Summary
@@ -613,15 +612,6 @@ jobs:
 
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
 
-          # CONFIG_DEBUG_KERNEL is not set
-          # CONFIG_DEBUG_INFO is not set
-          # CONFIG_SLUB_DEBUG is not set
-          # CONFIG_FTRACE is not set
-          # CONFIG_TRACING is not set
-          # CONFIG_DEBUG_PREEMPT is not set
-          # CONFIG_LOCKDEP is not set
-          # CONFIG_PROVE_LOCKING is not set
-
           CONFIG_HZ_300=y
           CONFIG_PREEMPT=y
           CONFIG_NO_HZ_IDLE=y
@@ -634,11 +624,6 @@ jobs:
           CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
           CONFIG_SLUB=y
           CONFIG_SLUB_CPU_PARTIAL=y
-          CONFIG_ZRAM=y
-          CONFIG_ZRAM_DEF_COMP_ZSTD=y
-          CONFIG_ZSWAP=y
-          CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y
-          CONFIG_ZSWAP_ZPOOL_DEFAULT_ZSMALLOC=y
 
           CONFIG_MQ_IOSCHED_KYBER=y
           CONFIG_IOSCHED_BFQ=y
@@ -805,8 +790,6 @@ jobs:
                 $FRAG_FLAG \
                 --copt="-mcpu=${TARGET_CPU}" \
                 --copt="-mtune=${TARGET_CPU}" \
-                --copt="-march=${TARGET_MARCH}" \
-                --copt="-O3" \
                 --copt="-fomit-frame-pointer" \
                 --copt="-ffunction-sections" \
                 --copt="-fdata-sections" \

@@ -6,7 +6,7 @@ index 7a2f9a7c..e3d91ef4 100644
  CFLAGS_ksu.o += $(call cc-option, -mno-outline-atomics)
  endif
  
-+CFLAGS_ksu.o += -mcpu=cortex-a78 -mtune=cortex-a78 -march=armv8.2-a+crypto+dotprod+fp16+rcpc+dcpop -fomit-frame-pointer -pipe
++CFLAGS_ksu.o += -mcpu=cortex-a78 -mtune=cortex-a78
 +
  ifneq ($(CONFIG_KSU_DEBUG),y)
  # strip, remove tracing / profiling
