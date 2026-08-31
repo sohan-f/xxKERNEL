@@ -150,7 +150,7 @@ jobs:
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           AOSP_MIRROR=https://android.googlesource.com
-          BRANCH=main-kernel-build-2025
+          BRANCH=main-kernel-2025
           git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
           git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
 
@@ -267,6 +267,8 @@ jobs:
           if [ -f "kernel/Kbuild" ]; then
             sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
           fi
+
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/cpu_optimization.patch"
           cd ..
 
           if [ -d "KernelSU/.git" ]; then
@@ -275,7 +277,6 @@ jobs:
           else
             echo "KSU_LATEST_COMMIT_DATE=Unknown" >> $GITHUB_ENV
           fi
-          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/cpu_optimization.patch"
 
       - name: Apply SUSFS Patch
         if: inputs.enable_susfs
@@ -801,7 +802,6 @@ jobs:
                 --disk_cache=/home/runner/.cache/bazel \
                 --config=fast \
                 --lto=thin \
-                --kmi_enforced=false \
                 $FRAG_FLAG \
                 --copt="-mcpu=${TARGET_CPU}" \
                 --copt="-mtune=${TARGET_CPU}" \

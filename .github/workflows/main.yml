@@ -22,7 +22,7 @@ on:
         description: "Custom build time (optional, N or blank = current UTC)"
         required: false
         type: string
-        default: "#1 SMP PREEMPT Sat Aug  1 12:42:00 UTC 2026"
+        default: "Thu Jul 16 14:32:05 UTC 2026"
       enable_nomount:
         required: true
         type: choice
