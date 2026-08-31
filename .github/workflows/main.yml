@@ -1,0 +1,104 @@
+name: Android 15 (6.6)
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_variant:
+        description: "KernelSU Variant"
+        required: true
+        type: choice
+        options:
+          - Official
+        default: Official
+      version:
+        description: "Custom version name (optional)"
+        required: false
+        type: string
+      build_time:
+        description: "Custom build time (optional, N or blank = current UTC)"
+        required: false
+        type: string
+        default: "#1 SMP PREEMPT Sat Aug  1 12:42:00 UTC 2026"
+      enable_nomount:
+        required: true
+        type: choice
+        options:
+          - "disabled"
+          - "master"
+          - "dev"
+        default: "dev"
+      droidspaces:
+        description: "Droidspaces container support"
+        required: false
+        type: choice
+        options:
+          - "off"
+          - "678"
+          - "123"
+          - "345"
+        default: "678"
+      artifact_upload_mode:
+        description: "Build artifact upload mode"
+        required: true
+        type: choice
+        options:
+          - "all"
+          - "ak3"
+        default: "ak3"
+      droidspaces_ntsync:
+        description: "Enable Droidspaces container NTSync support (requires Droidspaces to be enabled)"
+        required: false
+        type: boolean
+        default: false
+      use_bbg:
+        description: "Enable BBG anti-brick protection"
+        required: true
+        type: boolean
+        default: true
+      use_networking:
+        description: "Enable Networking (BBRv3)"
+        required: true
+        type: boolean
+        default: true
+      use_perf:
+        description: "Experimental performance config"
+        required: true
+        type: boolean
+        default: true
+      enable_susfs:
+        description: "Enable SUSFS"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  build-kernels-a15-6-6:
+    name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sub_level: "139"
+            os_patch_level: "2026-07"
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      android_version: "android15"
+      kernel_version: "6.6"
+      sub_level: ${{ matrix.sub_level }}
+      os_patch_level: ${{ matrix.os_patch_level }}
+      ksu_variant: ${{ inputs.kernelsu_variant }}
+      version: ${{ inputs.version || '' }}
+      build_time: ${{ inputs.build_time || '' }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_networking: ${{ inputs.use_networking }}
+      use_perf: ${{ inputs.use_perf }}
+      enable_susfs: ${{ inputs.enable_susfs }}
+      enable_nomount: ${{ inputs.enable_nomount }}
+      droidspaces: ${{ inputs.droidspaces || 'off' }}
+      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      artifact_upload_mode: ${{ inputs.artifact_upload_mode }}

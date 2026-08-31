@@ -1,0 +1,941 @@
+name: Build Kernel
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_call:
+    inputs:
+      android_version:
+        required: true
+        type: string
+      kernel_version:
+        required: true
+        type: string
+      sub_level:
+        required: true
+        type: string
+      os_patch_level:
+        required: true
+        type: string
+
+      ksu_variant:
+        required: true
+        type: string
+
+      version:
+        required: false
+        type: string
+      build_time:
+        required: false
+        type: string
+
+      use_bbg:
+        required: true
+        type: boolean
+        default: true
+      use_networking:
+        required: true
+        type: boolean
+        default: false
+      use_perf:
+        required: true
+        type: boolean
+        default: true
+      enable_susfs:
+        required: true
+        type: boolean
+      enable_nomount:
+        required: true
+        type: string
+      droidspaces:
+        required: false
+        type: string
+      artifact_upload_mode:
+        description: "Build artifact upload mode"
+        type: string
+        required: false
+      droidspaces_ntsync:
+        required: false
+        type: boolean
+
+jobs:
+  build-kernel:
+    name: "${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # Device CPU: 4x Cortex-A55 (LITTLE) + 4x Cortex-A78 (big), ARMv8.2-a
+      TARGET_CPU: "cortex-a78"
+      TARGET_MARCH: "armv8.2-a+crypto+dotprod+fp16+rcpc+dcpop"
+
+    steps:
+      - name: Build Summary
+        run: |
+          echo "Android: ${{ inputs.android_version }}"
+          echo "Kernel: ${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
+          echo "OSPL: ${{ inputs.os_patch_level }}"
+          echo "KSU: ${{ inputs.ksu_variant }}"
+          echo "Build Time: ${{ inputs.build_time }}"
+          echo "SUSFS: ${{ inputs.enable_susfs }}"
+          echo "BBG: ${{ inputs.use_bbg }}"
+          echo "Droidspaces: ${{ inputs.droidspaces }}"
+          echo "NTSync: ${{ inputs.droidspaces_ntsync }}"
+          echo "Upload: ${{ inputs.artifact_upload_mode }}"
+
+      - name: Clean up disk space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
+          rm_cmd: "rmz"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Initialize build environment
+        run: |
+          CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
+          KERNEL_ROOT="$GITHUB_WORKSPACE/$CONFIG"
+          mkdir -p "$KERNEL_ROOT"
+
+          cat >> $GITHUB_ENV << EOF
+          CONFIG=$CONFIG
+          KERNEL_ROOT=$KERNEL_ROOT
+          DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
+          SUSFS4KSU=$GITHUB_WORKSPACE/susfs4ksu
+          KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
+          ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
+          ACTION_BUILD=$GITHUB_WORKSPACE/Action-Build
+          AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool
+          MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
+          UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py
+          BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+          EOF
+
+          mkdir -p "$GITHUB_WORKSPACE/git-repo"
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$GITHUB_WORKSPACE/git-repo/repo"
+          chmod 0755 "$GITHUB_WORKSPACE/git-repo/repo"
+          echo "$GITHUB_WORKSPACE/git-repo" >> "$GITHUB_PATH"
+          echo "REPO=$GITHUB_WORKSPACE/git-repo/repo" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
+
+      - name: Prepare Bazel cache directory
+        run: mkdir -p ~/.cache/bazel
+
+      - name: Cache the toolchain
+        id: cache-toolchain
+        uses: actions/cache@v5
+        with:
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v1
+
+      - name: Download the toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          AOSP_MIRROR=https://android.googlesource.com
+          BRANCH=main-kernel-build-2025
+          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
+          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
+
+      - name: Generate signing key and configure Git
+        run: |
+          openssl genpkey \
+            -algorithm RSA \
+            -pkeyopt rsa_keygen_bits:2048 \
+            > "$BOOT_SIGN_KEY_PATH"
+
+          git config --global user.name "builder"
+          git config --global user.email "builder@example.com"
+
+      - name: Clone dependency repositories
+        run: |
+          ANYKERNEL_BRANCH="gki-2.0"
+          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+
+          echo "Cloning AnyKernel3..."
+          git clone https://github.com/WildKernels/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
+          rm -rf AnyKernel3/.git
+
+          echo "Cloning SUSFS (branch: $SUSFS_BRANCH)..."
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+
+          SUSFS_LATEST_COMMIT_DATE=$(git -C susfs4ksu log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')
+          echo "SUSFS_LATEST_COMMIT_DATE=$SUSFS_LATEST_COMMIT_DATE" >> $GITHUB_ENV
+          echo "SUSFS repository latest commit date: $SUSFS_LATEST_COMMIT_DATE"
+
+          echo "Preparing patch resources..."
+          git clone https://github.com/WildKernels/kernel_patches.git
+          git clone https://github.com/Numbersf/Action-Build.git --depth=1
+
+      - name: Initialize kernel source
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
+          echo "Initializing repo, branch: common-${FORMATTED_BRANCH}"
+
+          $REPO init \
+            --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "common-${FORMATTED_BRANCH}" \
+            --repo-rev=v2.16
+
+          $REPO --trace sync \
+            -c \
+            -j"$(nproc --all)" \
+            --no-tags \
+            --fail-fast
+
+      - name: Apply Stock Config spoofing
+        run: |
+          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
+          STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
+
+          if [ ! -f "$STOCK_SRC" ]; then
+            echo "$STOCK_SRC not detected, skipping Stock Config spoofing."
+            exit 0
+          fi
+
+          mkdir -p "$(dirname "$STOCK_DST")"
+          if ! cp "$STOCK_SRC" "$STOCK_DST"; then
+            echo "::error::Failed to copy stock_defconfig: $STOCK_SRC -> $STOCK_DST"
+            exit 1
+          fi
+          echo "Copied stock_defconfig -> $STOCK_DST"
+
+          NEW_RULE='$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE'
+          OLD_RULE='$(obj)/config_data: $(KCONFIG_CONFIG) FORCE'
+          TARGET_MAKEFILE="$KERNEL_ROOT/common/kernel/Makefile"
+
+          if [ ! -f "$TARGET_MAKEFILE" ]; then
+            echo "::error::$TARGET_MAKEFILE not found"
+            exit 1
+          fi
+
+          if grep -qF "$NEW_RULE" "$TARGET_MAKEFILE"; then
+            echo "config_data rule is already stock_defconfig, skipping."
+          elif grep -qF "$OLD_RULE" "$TARGET_MAKEFILE"; then
+            sed -i 's|$(obj)/config_data: $(KCONFIG_CONFIG) FORCE|$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE|' "$TARGET_MAKEFILE"
+            echo "Replaced config_data rule: $TARGET_MAKEFILE"
+          else
+            echo "::error::Rule not found in $TARGET_MAKEFILE: $OLD_RULE"
+            exit 1
+          fi
+
+      - name: Extract actual sublevel
+        run: |
+          ACTUAL_SUBLEVEL="${{ inputs.sub_level }}"
+          if [[ -f "$KERNEL_ROOT/common/Makefile" ]]; then
+            EXTRACTED=$(grep '^SUBLEVEL = ' "$KERNEL_ROOT/common/Makefile" | awk '{print $3}')
+            [[ -n "$EXTRACTED" ]] && ACTUAL_SUBLEVEL="$EXTRACTED"
+          fi
+          echo "ACTUAL_SUBLEVEL=$ACTUAL_SUBLEVEL" >> $GITHUB_ENV
+          echo "Actual sublevel: $ACTUAL_SUBLEVEL"
+
+      - name: Add KernelSU
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          BRANCH="master"
+
+          echo "Adding backslashxx KernelSU..."
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s $BRANCH
+
+          cd common
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          cd ..
+          cd KernelSU
+          KSU_GIT_VERSION=$(git rev-list --count HEAD)
+          KSU_VERSION=$((20000 + KSU_GIT_VERSION))
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+
+          if [ -f "kernel/Kbuild" ]; then
+            sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+          fi
+          cd ..
+
+          if [ -d "KernelSU/.git" ]; then
+            KSU_LATEST_COMMIT_DATE=$(git -C KernelSU log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')
+            echo "KSU_LATEST_COMMIT_DATE=$KSU_LATEST_COMMIT_DATE" >> $GITHUB_ENV
+          else
+            echo "KSU_LATEST_COMMIT_DATE=Unknown" >> $GITHUB_ENV
+          fi
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/cpu_optimization.patch"
+
+      - name: Apply SUSFS Patch
+        if: inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          echo "Applying SUSFS patch..."
+
+          SUSFS_PATCH="50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
+          cp "$SUSFS4KSU/kernel_patches/$SUSFS_PATCH" ./common/
+          cp $SUSFS4KSU/kernel_patches/fs/* ./common/fs/
+          cp $SUSFS4KSU/kernel_patches/include/linux/* ./common/include/linux/
+
+          # Apply Official KernelSU-side SUSFS patch
+          cd ./KernelSU
+          cp $SUSFS4KSU/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
+          if grep -q '^diff --git a/kernel/Makefile b/kernel/Makefile' ./10_enable_susfs_for_ksu.patch \
+            && ! grep -q '^diff --git a/kernel/Kbuild b/kernel/Kbuild' ./10_enable_susfs_for_ksu.patch; then
+            sed -i 's|kernel/Makefile|kernel/Kbuild|g' ./10_enable_susfs_for_ksu.patch
+          fi
+          patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
+          cd ..
+
+          cd $KERNEL_ROOT/common
+
+          # Compatibility fix for kernels missing VMA_PAD_START interface
+          if grep -qF 'VMA_PAD_START(vma)' "$SUSFS_PATCH" \
+            && ! grep -Rqs 'VMA_PAD_START' ./include/linux; then
+            echo "Target kernel does not provide VMA_PAD_START; using vma->vm_end for SUSFS OPEN_REDIRECT compatibility"
+            sed -i 's/VMA_PAD_START(vma)/vma->vm_end/g' "$SUSFS_PATCH"
+          fi
+
+          # Apply main patch
+          patch -p1 < "$SUSFS_PATCH" || true
+
+          # Fix base.c header hunk mismatch resulting in missing susfs_def.h
+          if grep -q 'AS_FLAGS_SUS_MAP\|susfs_is_current_proc_umounted\|SUSFS_IS_INODE_SUS_MAP\|SUSFS_IS_INODE_OPEN_REDIRECT' ./fs/proc/base.c && ! grep -qF 'susfs_def.h' ./fs/proc/base.c; then
+            if ! grep -qF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
+              sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
+            fi
+            sed -i '/#include <linux\/dma-buf.h>/a #endif' ./fs/proc/base.c
+            sed -i '/#include <linux\/dma-buf.h>/a #include <linux\/susfs_def.h>' ./fs/proc/base.c
+            sed -i '/#include <linux\/dma-buf.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)' ./fs/proc/base.c
+          fi
+
+          # Fix memory.c missing susfs_def.h
+          if grep -q 'SUSFS_IS_INODE_SUS_MAP' ./mm/memory.c && ! grep -qF '#include <linux/susfs_def.h>' ./mm/memory.c; then
+            if grep -qF '#include <linux/zswap.h>' ./mm/memory.c; then
+              sed -i '/#include <linux\/zswap.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
+            else
+              sed -i '/#include <linux\/sched\/sysctl.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
+            fi
+          fi
+
+      - name: Integrate NoMount
+        if: ${{ inputs.enable_nomount != 'disabled' }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          NOMOUNT_BRANCH="${{ inputs.enable_nomount }}"
+
+          echo "Integrating NoMount ($NOMOUNT_BRANCH)..."
+
+          cd common
+          curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh" \
+            | bash -s "$NOMOUNT_BRANCH"
+
+          echo "NoMount integration completed successfully."
+
+      - name: Clone Droidspaces patch repository
+        if: inputs.droidspaces != 'off'
+        run: |
+          git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
+          echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
+
+      - name: Backup baseline defconfig
+        run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
+
+      - name: Integrate Droidspaces support
+        if: inputs.droidspaces != 'off'
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          SLOT="${{ inputs.droidspaces }}"
+
+          # Format slot name (e.g., 678 -> 6_7_8)
+          SLOT_NAME=$(echo "$SLOT" | sed 's/\(.\)/\1_/g; s/_$//')
+          echo "Applying Droidspaces SYSVIPC kABI fix patch (Slot: $SLOT / $SLOT_NAME)..."
+
+          PATCH_FILE="$DROIDSPACES_PATCHES/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
+          if ! patch -p1 --forward < "$PATCH_FILE"; then
+            echo "::warning::Failed to apply SYSVIPC kABI patch; it may already be applied or context mismatched"
+          fi
+
+          echo "Adding Droidspaces kernel configurations..."
+
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_IP_NF_TARGET_REJECT=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+          echo "Droidspaces integration complete"
+
+      - name: x86_64 Emulation support
+        if: inputs.droidspaces != 'off'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          echo "Enabling x86_64 emulation (binfmt) configs..."
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_BINFMT_MISC=y
+          CONFIG_BINFMT_SCRIPT=y
+          CONFIG_BINFMT_ELF=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+      - name: Inject NTSync kernel configuration
+        if: inputs.droidspaces != 'off' && inputs.droidspaces_ntsync
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -e
+          echo "Injecting NTSync kernel patches..."
+
+          NTSYNC_PATCH="ntsync_compat_${{ inputs.android_version }}-${{ inputs.kernel_version }}"
+          NTSYNC_URL="https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync"
+
+          wget -q "$NTSYNC_URL/ntsync_base.patch"
+          wget -q "$NTSYNC_URL/${NTSYNC_PATCH}.patch"
+
+          patch -p1 < "ntsync_base.patch"
+          patch -p1 < "${NTSYNC_PATCH}.patch"
+
+          echo "Enabling CONFIG_NTSYNC..."
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_NTSYNC=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+          echo "NTSync patch and configuration injection complete."
+
+      - name: Apply Unicode Bypass Fix
+        if: inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1+.patch" || true
+
+      - name: Apply BBG Patch
+        if: inputs.use_bbg
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
+
+      - name: Network patches apply
+        if: inputs.use_networking
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          cd common
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+
+          echo "Applying bbrv3 patches"
+          patch -p1 < $KERNEL_PATCHES/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android15-6.6.patch
+          echo "bbrv3 patches applied"
+
+          echo "Enabling networking configs"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP6_NF_NAT=y
+          CONFIG_IP6_NF_TARGET_MASQUERADE=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BIC=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_ACT_CONNMARK=y
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          CONFIG_WIREGUARD=y
+          CONFIG_TCP_CONG_BBR3=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+      - name: Apply Experimental Patches
+        if: inputs.use_perf
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euo pipefail
+
+          KERNEL_VERSION="${{ inputs.kernel_version }}"
+          MIN_VERSION="5.16"
+
+          cd common
+          patch -p1 --forward < "$KERNEL_PATCHES/common/optimized_mem_operations.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/file_struct_8bytes_align.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/reduce_cache_pressure.patch"
+
+          patch -p1 --forward < "$KERNEL_PATCHES/common/mem_opt_prefetch.patch"
+
+          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | tail -n1)" = "$KERNEL_VERSION" ]; then
+            patch -p1 --forward < "$KERNEL_PATCHES/common/optimise_memcmp.patch"
+          elif [ "$(printf '%s\n' "$KERNEL_VERSION" "5.11" | sort -V | tail -n1)" = "$KERNEL_VERSION" ]; then
+            sed \
+              -e 's/SYM_FUNC_START(__pi_memcmp)/SYM_FUNC_START_WEAK_PI(memcmp)/' \
+              -e 's/SYM_FUNC_END(__pi_memcmp)/SYM_FUNC_END_PI(memcmp)/' \
+              -e 's/SYM_FUNC_ALIAS_WEAK(memcmp, __pi_memcmp)/EXPORT_SYMBOL_NOKASAN(memcmp)/' \
+              "$KERNEL_PATCHES/common/optimise_memcmp.patch" | patch -p1 --forward
+          else
+            echo "Optimised memcmp patch not found!"
+          fi
+
+          patch -p1 --forward < "$KERNEL_PATCHES/common/minimise_wakeup_time.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/int_sqrt.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/force_tcp_nodelay.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/reduce_gc_thread_sleep_time.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/add_timeout_wakelocks_globally.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/f2fs_reduce_congestion.patch"
+          patch -p1 --forward < "$KERNEL_PATCHES/common/reduce_freeze_timeout.patch"
+
+          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
+            patch -p1 --forward < "$KERNEL_PATCHES/common/clear_page_16bytes_align.patch"
+          else
+            sed \
+              -e 's/SYM_FUNC_START_PI(clear_page)/SYM_FUNC_START_PI(__pi_clear_page)/' \
+              "$KERNEL_PATCHES/common/clear_page_16bytes_align.patch" | patch -p1 -F3 --forward
+          fi
+
+          echo "Patching add_limitation_scaling_min_freq.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/add_limitation_scaling_min_freq.patch"
+
+          echo "Patching re_write_limitation_scaling_min_freq.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/re_write_limitation_scaling_min_freq.patch"
+
+          echo "Patching adjust_cpu_scan_order.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/adjust_cpu_scan_order.patch"
+
+          echo "Patching avoid_extra_s2idle_wake_attempts.patch"
+          FILE="drivers/base/power/wakeup.c"
+
+          if grep -q "^void pm_system_wakeup(void)" "$FILE"; then
+            if sed -n '/^void pm_system_wakeup(void)/,/^}/p' "$FILE" | grep -q 'suspend_abort_fs_sync();'; then
+              sed -i '/^void pm_system_wakeup(void)/,/^}/{
+                /suspend_abort_fs_sync();/d
+              }' "$FILE"
+            fi
+          fi
+
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/avoid_extra_s2idle_wake_attempts.patch"
+
+          echo "Patching disable_cache_hot_buddy.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/disable_cache_hot_buddy.patch"
+
+          echo "Patching f2fs_enlarge_min_fsync_blocks.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/f2fs_enlarge_min_fsync_blocks.patch"
+
+          echo "Patching increase_ext4_default_commit_age.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/increase_ext4_default_commit_age.patch"
+
+          echo "Patching increase_sk_mem_packets.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/increase_sk_mem_packets.patch"
+
+          echo "Patching reduce_pci_pme_wakeups.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/reduce_pci_pme_wakeups.patch"
+
+          echo "Patching silence_irq_cpu_logspam.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/silence_irq_cpu_logspam.patch"
+
+          echo "Patching silence_system_logspam.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/silence_system_logspam.patch"
+
+          echo "Patching use_unlikely_wrap_cpufreq.patch"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/use_unlikely_wrap_cpufreq.patch"
+
+          echo "✅ Other patches applied"
+
+      - name: Configure Kernel Options
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          echo "Applying kernel configurations..."
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_KSU=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+
+          # CONFIG_DEBUG_KERNEL is not set
+          # CONFIG_DEBUG_INFO is not set
+          # CONFIG_SLUB_DEBUG is not set
+          # CONFIG_FTRACE is not set
+          # CONFIG_TRACING is not set
+          # CONFIG_DEBUG_PREEMPT is not set
+          # CONFIG_LOCKDEP is not set
+          # CONFIG_PROVE_LOCKING is not set
+
+          CONFIG_HZ_300=y
+          CONFIG_PREEMPT=y
+          CONFIG_NO_HZ_IDLE=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_CPU_IDLE_GOV_MENU=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+
+          CONFIG_TRANSPARENT_HUGEPAGE=y
+          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+          CONFIG_SLUB=y
+          CONFIG_SLUB_CPU_PARTIAL=y
+          CONFIG_ZRAM=y
+          CONFIG_ZRAM_DEF_COMP_ZSTD=y
+          CONFIG_ZSWAP=y
+          CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y
+          CONFIG_ZSWAP_ZPOOL_DEFAULT_ZSMALLOC=y
+
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_BFQ_GROUP_IOSCHED=y
+
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+
+          CONFIG_PM_AUTOSLEEP=y
+          CONFIG_PM_WAKELOCKS=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_DEVFREQ_THERMAL=y
+
+          CONFIG_LTO_CLANG_THIN=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+          sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: Configure SUSFS options
+        if: inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+      - name: Enable nomount meta module
+        if: ${{ inputs.enable_nomount != 'disabled' }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          apply_line "CONFIG_NOMOUNT=y" "$DEFCONFIG"
+
+      - name: Configure Kernel Name
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+          sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
+          rm -rf ./common/android/abi_gki_protected_exports_*
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+
+          VERSION_INPUT=$(echo "${{ inputs.version }}" | tr -d '[:space:]')
+          if [ -n "$VERSION_INPUT" ]; then
+            CLEAN_VERSION=$(echo "$VERSION_INPUT" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//')
+            perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${CLEAN_VERSION}"'"/s' ./common/scripts/setlocalversion 2>/dev/null || true
+            sed -i "\$s|echo \"\$res\"|echo \"${CLEAN_VERSION}\"|" ./common/scripts/setlocalversion 2>/dev/null || true
+            sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="'"$CLEAN_VERSION"'"/' ./common/arch/arm64/configs/gki_defconfig
+          else
+            cd ./common
+            BID="ab$((RANDOM % 90000000 + 10000000))"
+            GHASH=$(git rev-parse --verify HEAD | cut -c1-13)
+            KMI_TAG="android15-8"
+            SUFFIX="-${KMI_TAG}-g${GHASH}-${BID}"
+            perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${SUFFIX}"'\$\{config_localversion\}"/s' ./scripts/setlocalversion 2>/dev/null || true
+          fi
+
+      - name: Set Custom Build Time
+        shell: bash
+        env:
+          INPUT_TIME: ${{ inputs.build_time }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then
+            TIME_REGEX='^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0[1-9]|[12][0-9]|3[01]) ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] UTC [0-9]{4}$'
+            if [[ ! "$INPUT_TIME" =~ $TIME_REGEX ]]; then
+              echo "::warning title=Build time format error::Custom build time must be formatted like 'Sun Dec 01 08:10:00 UTC 2024'. Please remove extra prefixes and use a two-digit day."
+              exit 1
+            fi
+
+            NORMALIZED_TIME="$(LC_ALL=C TZ=UTC date -u -d "$INPUT_TIME" +'%a %b %d %T UTC %Y' 2>/dev/null || true)"
+            if [[ "$NORMALIZED_TIME" != "$INPUT_TIME" ]]; then
+              echo "::warning title=Invalid build time::Custom build time cannot be parsed as valid UTC time, or the day of the week does not match the date."
+              exit 1
+            fi
+
+            DATESTR="$INPUT_TIME"
+          else
+            DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"
+          fi
+
+          echo "Using build time: $DATESTR"
+          echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
+
+          f="$KERNEL_ROOT/common/scripts/mkcompile_h"
+          if [ -f "$f" ]; then
+            echo "Applying 6.x mkcompile_h patch: $f"
+            if grep -q 'UTS_VERSION=' "$f"; then
+              perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+            else
+              perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
+            fi
+          fi
+
+      - name: Compile Kernel
+        id: compile_kernel
+        uses: nick-fields/retry@v4
+        with:
+          shell: bash
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_on: timeout
+          command: |
+            LOG_DIR="$GITHUB_WORKSPACE/build-logs"
+            ATTEMPT_FILE="$LOG_DIR/.compile-attempt"
+            mkdir -p "$LOG_DIR"
+
+            ATTEMPT=1
+            if [ -s "$ATTEMPT_FILE" ]; then
+              read -r LAST_ATTEMPT < "$ATTEMPT_FILE"
+              if [[ "$LAST_ATTEMPT" =~ ^[0-9]+$ ]]; then
+                ATTEMPT=$((LAST_ATTEMPT + 1))
+              fi
+            fi
+            echo "$ATTEMPT" > "$ATTEMPT_FILE"
+            LOG_FILE="$LOG_DIR/compile-attempt-${ATTEMPT}.log"
+
+            set -o pipefail
+            {
+              echo "Compile attempt: $ATTEMPT"
+              echo "Start time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+              echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
+              echo "Current SUSFS latest commit date: ${SUSFS_LATEST_COMMIT_DATE}"
+              set -ex
+              cd "$KERNEL_ROOT"
+
+              # Extract defconfig changes into a fragment for Kleaf/Bazel build
+              FRAG="common/arch/arm64/configs/ksu.fragment"
+              diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
+              cp "$DEFCONFIG.orig" "$DEFCONFIG"
+              echo "=== KSU Fragment Content ==="
+              cat "$FRAG"
+              echo "========================="
+
+              FRAG_FLAG=""
+              if [ -s "$FRAG" ]; then
+                FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
+              fi
+
+              tools/bazel build \
+                --disk_cache=/home/runner/.cache/bazel \
+                --config=fast \
+                --lto=thin \
+                --kmi_enforced=false \
+                $FRAG_FLAG \
+                --copt="-mcpu=${TARGET_CPU}" \
+                --copt="-mtune=${TARGET_CPU}" \
+                --copt="-march=${TARGET_MARCH}" \
+                --copt="-O3" \
+                --copt="-fomit-frame-pointer" \
+                --copt="-ffunction-sections" \
+                --copt="-fdata-sections" \
+                --copt="-fno-unwind-tables" \
+                --copt="-fno-asynchronous-unwind-tables" \
+                //common:kernel_aarch64_dist || exit 1
+              strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+
+              echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
+              echo "Current SUSFS latest commit date: ${SUSFS_LATEST_COMMIT_DATE}"
+            } 2>&1 | tee "$LOG_FILE"
+
+            BUILD_STATUS=${PIPESTATUS[0]}
+            {
+              echo "End time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+              echo "Exit code: $BUILD_STATUS"
+            } >> "$LOG_FILE"
+            exit "$BUILD_STATUS"
+
+      - name: Collect Build Failure Logs
+        if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
+        env:
+          COMPILE_ATTEMPTS: ${{ steps.compile_kernel.outputs.total_attempts }}
+          COMPILE_EXIT_CODE: ${{ steps.compile_kernel.outputs.exit_code }}
+        run: |
+          LOG_DIR="$GITHUB_WORKSPACE/build-logs"
+          mkdir -p "$LOG_DIR"
+
+          {
+            echo "Android Version: ${{ inputs.android_version }}"
+            echo "Kernel Version: ${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+            echo "OS Patch Level: ${{ inputs.os_patch_level }}"
+            echo "KernelSU Variant: ${{ inputs.ksu_variant }}"
+            echo "Config Name: ${CONFIG:-Unknown}"
+            echo "Git Commit: $GITHUB_SHA"
+            echo "Workflow URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Compile Attempts: ${COMPILE_ATTEMPTS:-Unknown}"
+            echo "Final Exit Code: ${COMPILE_EXIT_CODE:-Unknown}"
+            echo "KernelSU Commit Date: ${KSU_LATEST_COMMIT_DATE:-Unknown}"
+            echo "SUSFS Commit Date: ${SUSFS_LATEST_COMMIT_DATE:-Unknown}"
+          } > "$LOG_DIR/summary.txt"
+
+          printf '%s\n' "${{ inputs.ksu_variant }}_kernel-${CONFIG}-Build-Logs" > "$LOG_DIR/artifact-name.txt"
+
+          df -h "$GITHUB_WORKSPACE" > "$LOG_DIR/disk-usage.txt" 2>&1 || true
+
+      - name: Upload Build Failure Logs
+        if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Official_kernel-${{ env.CONFIG }}-Build-Logs
+          path: build-logs/
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 9
+
+      - name: Prepare Boot Images
+        run: |
+          mkdir -p bootimgs
+          SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
+
+          cp "$SRC_DIR/Image" ./bootimgs/
+          [ -f "$SRC_DIR/Image.lz4" ] && cp "$SRC_DIR/Image.lz4" ./bootimgs/
+          cp "$SRC_DIR/Image" ./
+          [ -f "$SRC_DIR/Image.lz4" ] && cp "$SRC_DIR/Image.lz4" ./
+          gzip -n -k -f -9 ./Image > ./Image.gz
+
+      - name: Create AnyKernel3 Zip
+        if: inputs.artifact_upload_mode == 'all'
+        run: |
+          cd "$ANYKERNEL3"
+          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          mv ../Image ./Image
+          zip -r "../$ZIP_NAME" ./*
+
+      - name: Prepare AnyKernel3 Directory
+        if: inputs.artifact_upload_mode != 'all'
+        run: |
+          mv ./Image "$ANYKERNEL3/Image"
+
+      - name: Collect Patch Conflict Files
+        if: always()
+        run: |
+          REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
+          mkdir -p "$REJECTS_DIR"
+
+          mapfile -t REJS < <(find "$KERNEL_ROOT" -type f -name '*.rej')
+          REJ_COUNT=${#REJS[@]}
+          echo "Found $REJ_COUNT .rej file(s)"
+          echo "REJ_COUNT=$REJ_COUNT" >> $GITHUB_ENV
+
+          if [ "$REJ_COUNT" -gt 0 ]; then
+            for REJ in "${REJS[@]}"; do
+              REL="${REJ#"$KERNEL_ROOT"/}"
+              DEST="$REJECTS_DIR/$REL"
+              mkdir -p "$(dirname "$DEST")"
+              cp "$REJ" "$DEST"
+
+              ORIG="${REJ%.rej}"
+              if [ -f "$ORIG" ]; then
+                cp "$ORIG" "${DEST%.rej}"
+              fi
+              echo "$REL" >> "$REJECTS_DIR/index.txt"
+            done
+          fi
+
+      - name: Upload AnyKernel3 Package
+        if: inputs.artifact_upload_mode != 'all'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Official_kernel-${{ env.CONFIG }}-AnyKernel3
+          path: AnyKernel3/*
+          compression-level: 9
+
+      - name: Upload All Build Artifacts
+        if: inputs.artifact_upload_mode == 'all'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Official_kernel-${{ env.CONFIG }}
+          path: |
+            *AnyKernel3.zip
+            *.img
+          compression-level: 9
+
+      - name: Upload Patch Conflict Files
+        if: always() && env.REJ_COUNT > 0
+        uses: actions/upload-artifact@v6
+        with:
+          name: Official_kernel-${{ env.CONFIG }}-Rejects
+          path: patch-rejects/
+          if-no-files-found: ignore
+          compression-level: 9
