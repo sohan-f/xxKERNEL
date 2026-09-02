@@ -136,6 +136,21 @@ jobs:
           echo "MANIFEST_HASH=${MANIFEST_HASH}" >> $GITHUB_ENV
           echo "Manifest HEAD: ${MANIFEST_HASH}"
 
+      - name: Delete stale kernel source cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-"
+          CURRENT="${PREFIX}${{ env.MANIFEST_HASH }}"
+          echo "Checking for stale kernel source caches with prefix: $PREFIX"
+          gh cache list --repo ${{ github.repository }} --key "$PREFIX" --limit 100 --json key -q '.[].key' | \
+          while read -r k; do
+            if [ "$k" != "$CURRENT" ]; then
+              echo "Deleting stale kernel source cache: $k"
+              gh cache delete "$k" --repo ${{ github.repository }} || true
+            fi
+          done
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -878,6 +893,21 @@ jobs:
         with:
           path: ~/.cache/bazel
           key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
+
+      - name: Delete previous Bazel cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-"
+          CURRENT="${PREFIX}${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}"
+          echo "Checking for previous Bazel caches with prefix: $PREFIX"
+          gh cache list --repo ${{ github.repository }} --key "$PREFIX" --limit 100 --json key -q '.[].key' | \
+          while read -r k; do
+            if [ "$k" != "$CURRENT" ]; then
+              echo "Deleting previous Bazel cache: $k"
+              gh cache delete "$k" --repo ${{ github.repository }} || true
+            fi
+          done
 
       - name: Collect Build Failure Logs
         if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
