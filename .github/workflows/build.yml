@@ -748,6 +748,8 @@ jobs:
           echo "Using build time: $DATESTR"
           echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_USER="sohan" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_HOST="cuscoi" >> "$GITHUB_ENV"
 
           f="$KERNEL_ROOT/common/scripts/mkcompile_h"
           if [ -f "$f" ]; then
