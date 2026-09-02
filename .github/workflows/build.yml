@@ -508,6 +508,27 @@ jobs:
             apply_line "$line" "$DEFCONFIG"
           done <<< "$CONFIGS"
 
+      - name: Enable ZRAM
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_SWAP=y
+          CONFIG_ZSMALLOC=m
+          CONFIG_ZRAM=m
+          CONFIG_ZRAM_DEF_COMP_LZ4=y
+          CONFIG_CRYPTO_ZSTD=y
+          CONFIG_CRYPTO_LZ4=y
+          CONFIG_ZRAM_MULTI_COMP=y
+          EOF
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+          echo "ZRAM applied"
+
       - name: Apply Experimental Patches
         if: inputs.use_perf
         working-directory: ${{ env.KERNEL_ROOT }}
