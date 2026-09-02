@@ -170,7 +170,9 @@ jobs:
         id: cache-bazel
         uses: actions/cache/restore@v5
         with:
-          path: ~/.cache/bazel
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel_root
           key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
           restore-keys: |
             bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-
@@ -894,11 +896,11 @@ jobs:
                 FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
               fi
 
-              tools/bazel build \
-                --disk_cache=/home/runner/.cache/bazel \
+              tools/bazel --output_user_root=/home/runner/.cache/bazel_root build \
                 --config=fast \
                 --lto=thin \
                 $FRAG_FLAG \
+                --disk_cache=/home/runner/.cache/bazel \
                 --copt="-mcpu=${TARGET_CPU}" \
                 --copt="-mtune=${TARGET_CPU}" \
                 --copt="-fomit-frame-pointer" \
@@ -924,7 +926,9 @@ jobs:
         if: steps.cache-bazel.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: ~/.cache/bazel
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel_root
           key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
 
       - name: Delete previous Bazel cache
