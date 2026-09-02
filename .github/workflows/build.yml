@@ -170,13 +170,26 @@ jobs:
         id: cache-bazel
         uses: actions/cache/restore@v5
         with:
-          path: |
-            ~/.cache/bazel
-            ~/.cache/bazel_root
-          key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
+          path: ~/.cache/bazel
+          key: bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-${{ github.run_id }}
           restore-keys: |
-            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-
-            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-
+            bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-
+            bazel-${{ inputs.kernel_version }}-
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ inputs.kernel_version }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.kernel_version }}-
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          mkdir -p ~/.cache/ccache
+          ccache -M 10G
 
       - name: Cache the toolchain
         id: cache-toolchain
@@ -896,11 +909,15 @@ jobs:
                 FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
               fi
 
-              tools/bazel --output_user_root=/home/runner/.cache/bazel_root build \
+              export CCACHE_DIR=/home/runner/.cache/ccache
+
+              tools/bazel build \
                 --config=fast \
                 --lto=thin \
                 $FRAG_FLAG \
                 --disk_cache=/home/runner/.cache/bazel \
+                --action_env=CCACHE_DIR=/home/runner/.cache/ccache \
+                --action_env=PATH \
                 --copt="-mcpu=${TARGET_CPU}" \
                 --copt="-mtune=${TARGET_CPU}" \
                 --copt="-fomit-frame-pointer" \
@@ -909,6 +926,7 @@ jobs:
                 --copt="-fno-unwind-tables" \
                 --copt="-fno-asynchronous-unwind-tables" \
                 //common:kernel_aarch64_dist || exit 1
+
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
 
               echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
@@ -922,14 +940,18 @@ jobs:
             } >> "$LOG_FILE"
             exit "$BUILD_STATUS"
 
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ inputs.kernel_version }}-${{ github.run_id }}
+
       - name: Save Bazel cache
-        if: steps.cache-bazel.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: |
-            ~/.cache/bazel
-            ~/.cache/bazel_root
-          key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
+          path: ~/.cache/bazel
+          key: bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-${{ github.run_id }}
 
       - name: Delete previous Bazel cache
         env:
