@@ -564,23 +564,56 @@ jobs:
           done <<< "$CONFIGS"
 
       - name: Enable ZRAM
-        working-directory: ${{ env.KERNEL_ROOT }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
+          echo "Setup env"
+          SUKISU_PATCHES=${{ github.workspace }}/sukisu_patches
+          ZZH_PATCHES=${{ github.workspace }}/zram
+
+          echo "Clonig SUKISU_PATCHES for zram"
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git $SUKISU_PATCHES
+
+          echo "Upgrading LZ4..."
+          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
+
+          cp -r $ZZH_PATCHES/lz4/* ./lib/lz4/
+          cp -r $ZZH_PATCHES/include/linux/* ./include/linux/
+          bash $ZZH_PATCHES/apply_lz4_neon.sh
+
+          if [ -f "fs/f2fs/Makefile" ] && ! grep -qF "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" "fs/f2fs/Makefile"; then
+            echo "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" >> "fs/f2fs/Makefile"
+          fi
+
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/lib/* ./lib/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k/crypto/* ./crypto/
+          cp -r $SUKISU_PATCHES/other/zram/lz4k_oplus ./lib/
+
+          cp $SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4kd.patch ./
+          if ! patch -p1 -F 3 < lz4kd.patch; then
+            echo "::warning::Failed to apply lz4kd.patch; it may already be applied or the context may not match"
+          fi
+
+          cp $SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4k_oplus.patch ./
+          if ! patch -p1 -F 3 < lz4k_oplus.patch; then
+            echo "::warning::Failed to apply lz4k_oplus.patch; it may already be applied or the context may not match"
+          fi
+
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
 
           read -r -d '' CONFIGS <<'EOF' || true
-          CONFIG_SWAP=y
-          CONFIG_ZSMALLOC=m
-          CONFIG_ZRAM=m
-          CONFIG_ZRAM_DEF_COMP_LZ4=y
-          CONFIG_CRYPTO_ZSTD=y
-          CONFIG_CRYPTO_LZ4=y
-          CONFIG_ZRAM_MULTI_COMP=y
+          CONFIG_ZSMALLOC=y
+          CONFIG_ZRAM=y
+          CONFIG_CRYPTO_LZ4HC=y
+          CONFIG_CRYPTO_LZ4K=y
+          CONFIG_CRYPTO_LZ4KD=y
+          CONFIG_CRYPTO_842=y
           EOF
 
           while IFS= read -r line || [ -n "$line" ]; do
             apply_line "$line" "$DEFCONFIG"
           done <<< "$CONFIGS"
+          sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "${{ env.KERNEL_ROOT }}/common/modules.bzl"
 
           echo "ZRAM applied"
 
