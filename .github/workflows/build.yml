@@ -803,7 +803,7 @@ jobs:
             sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="'"$CLEAN_VERSION"'"/' ./common/arch/arm64/configs/gki_defconfig
           else
             cd ./common
-            BID="ab$((RANDOM % 90000000 + 10000000))"
+            BID="ab10000069"
             GHASH=$(git rev-parse --verify HEAD | cut -c1-13)
             KMI_TAG="android15-8"
             SUFFIX="-${KMI_TAG}-g${GHASH}-${BID}"
