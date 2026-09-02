@@ -128,6 +128,14 @@ jobs:
           echo "$GITHUB_WORKSPACE/git-repo" >> "$GITHUB_PATH"
           echo "REPO=$GITHUB_WORKSPACE/git-repo/repo" >> $GITHUB_ENV
 
+      - name: Get kernel manifest HEAD
+        run: |
+          BRANCH="common-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
+          MANIFEST_HASH=$(git ls-remote https://android.googlesource.com/kernel/manifest \
+            "refs/heads/${BRANCH}" | cut -f1 | head -c12)
+          echo "MANIFEST_HASH=${MANIFEST_HASH}" >> $GITHUB_ENV
+          echo "Manifest HEAD: ${MANIFEST_HASH}"
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -135,6 +143,23 @@ jobs:
 
       - name: Prepare Bazel cache directory
         run: mkdir -p ~/.cache/bazel
+
+      - name: Get KernelSU HEAD hash
+        run: |
+          KSU_HASH=$(git ls-remote https://github.com/backslashxx/KernelSU \
+            refs/heads/master | cut -f1 | head -c12)
+          echo "KSU_HASH=${KSU_HASH}" >> $GITHUB_ENV
+          echo "KernelSU HEAD: ${KSU_HASH}"
+
+      - name: Restore Bazel cache
+        id: cache-bazel
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
+          restore-keys: |
+            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-
+            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-
 
       - name: Cache the toolchain
         id: cache-toolchain
@@ -183,7 +208,15 @@ jobs:
           git clone https://github.com/WildKernels/kernel_patches.git
           git clone https://github.com/Numbersf/Action-Build.git --depth=1
 
+      - name: Restore kernel source cache
+        id: cache-kernel-source
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.KERNEL_ROOT }}
+          key: kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ env.MANIFEST_HASH }}
+
       - name: Initialize kernel source
+        if: steps.cache-kernel-source.outputs.cache-hit != 'true'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
@@ -200,6 +233,13 @@ jobs:
             -j"$(nproc --all)" \
             --no-tags \
             --fail-fast
+
+      - name: Save kernel source cache
+        if: steps.cache-kernel-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.KERNEL_ROOT }}
+          key: kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ env.MANIFEST_HASH }}
 
       - name: Apply Stock Config spoofing
         run: |
@@ -831,6 +871,13 @@ jobs:
               echo "Exit code: $BUILD_STATUS"
             } >> "$LOG_FILE"
             exit "$BUILD_STATUS"
+
+      - name: Save Bazel cache
+        if: steps.cache-bazel.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}
 
       - name: Collect Build Failure Logs
         if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
