@@ -24,3 +24,29 @@ index 75b9d2e7..88fd1263 100644
  
  static int ksu_prepare_new_blacklist(uintptr_t blacklist_pptr)
  {
+diff --git a/kernel/ksu.c b/kernel/ksu.c
+index f728825f..8913e8ad 100644
+--- a/kernel/ksu.c
++++ b/kernel/ksu.c
+@@ -264,7 +264,20 @@ static int __init kernelsu_init(void)
+ }
+ 
+ #if !defined(MODULE)
+-device_initcall(kernelsu_init);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
++char ksu_block_modules[256] = "";
++#include "downstream/module_blacklist.h"
++#else
++#define ksu_extend_module_blacklist() do { } while (0)
++#endif
++
++static int __init kernelsu_builtin_init(void)
++{
++    kernelsu_init();
++    ksu_extend_module_blacklist();
++    return 0;
++}
++device_initcall(kernelsu_builtin_init);
+ #else
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
