@@ -731,6 +731,7 @@ jobs:
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
           read -r -d '' CONFIGS <<'EOF' || true
           CONFIG_KSU=y
+          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
 
