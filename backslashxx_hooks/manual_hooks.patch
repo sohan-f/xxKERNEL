@@ -30,7 +30,7 @@ index 0641cb3fd..b7cde25e8 100644
  }
  
 diff --git a/fs/stat.c b/fs/stat.c
-index 517fa4ed8..765ea18a4 100644
+index 517fa4ed8..4a2f5d4b8 100644
 --- a/fs/stat.c
 +++ b/fs/stat.c
 @@ -460,6 +460,11 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
@@ -49,13 +49,13 @@ index 517fa4ed8..765ea18a4 100644
  	if (!error)
  		error = cp_new_stat(&stat, statbuf);
  
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD)
 +#pragma GCC diagnostic push
 +#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
-+#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD)
 +	extern void ksu_handle_newfstat_ret(unsigned int *, struct stat __user **);
 +	ksu_handle_newfstat_ret(&fd, &statbuf);
-+#endif
 +#pragma GCC diagnostic pop
++#endif
 +
  	return error;
  }
@@ -64,13 +64,13 @@ index 517fa4ed8..765ea18a4 100644
  	if (!error)
  		error = cp_new_stat64(&stat, statbuf);
  
++#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD) // for 32-bit
 +#pragma GCC diagnostic push
 +#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
-+#if defined(CONFIG_KSU) && !defined(CONFIG_KSU_KPROBES_KSUD) // for 32-bit
 +	extern void ksu_handle_fstat64_ret(unsigned long *, struct stat64 __user **);
 +	ksu_handle_fstat64_ret(&fd, &statbuf);
-+#endif
 +#pragma GCC diagnostic pop
++#endif
 +
  	return error;
  }
