@@ -5,6 +5,8 @@ permissions:
   actions: write
 
 on:
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       kernelsu_variant:
@@ -41,14 +43,6 @@ on:
           - "123"
           - "345"
         default: "678"
-      artifact_upload_mode:
-        description: "Build artifact upload mode"
-        required: true
-        type: choice
-        options:
-          - "all"
-          - "ak3"
-        default: "ak3"
       droidspaces_ntsync:
         description: "Enable Droidspaces container NTSync support (requires Droidspaces to be enabled)"
         required: false
@@ -71,7 +65,21 @@ on:
         default: true
 
 jobs:
+  flush-cache:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flush GitHub Actions cache
+        run: |
+          gh cache list --json id --jq '.[].id' | \
+          xargs -I{} gh cache delete {}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
   build-kernels-a15-6-6:
+    needs: flush-cache
+    if: always() && (needs.flush-cache.result == 'success' || needs.flush-cache.result == 'skipped')
     name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
     strategy:
       fail-fast: false
@@ -95,4 +103,3 @@ jobs:
       enable_nomount: ${{ inputs.enable_nomount }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
-      artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
