@@ -12,8 +12,8 @@ on:
         required: true
         type: choice
         options:
-          - Official
-        default: Official
+          - xxksu
+        default: xxksu
       version:
         description: "Custom version name (optional)"
         required: false
@@ -69,11 +69,6 @@ on:
         required: true
         type: boolean
         default: true
-      enable_susfs:
-        description: "Enable SUSFS"
-        required: true
-        type: boolean
-        default: false
 
 jobs:
   build-kernels-a15-6-6:
@@ -97,7 +92,6 @@ jobs:
       use_bbg: ${{ inputs.use_bbg }}
       use_networking: ${{ inputs.use_networking }}
       use_perf: ${{ inputs.use_perf }}
-      enable_susfs: ${{ inputs.enable_susfs }}
       enable_nomount: ${{ inputs.enable_nomount }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
