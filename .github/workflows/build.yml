@@ -49,10 +49,6 @@ on:
       droidspaces:
         required: false
         type: string
-      artifact_upload_mode:
-        description: "Build artifact upload mode"
-        type: string
-        required: false
       droidspaces_ntsync:
         required: false
         type: boolean
@@ -78,7 +74,6 @@ jobs:
           echo "BBG: ${{ inputs.use_bbg }}"
           echo "Droidspaces: ${{ inputs.droidspaces }}"
           echo "NTSync: ${{ inputs.droidspaces_ntsync }}"
-          echo "Upload: ${{ inputs.artifact_upload_mode }}"
 
       - name: Clean up disk space
         uses: endersonmenezes/free-disk-space@v3
@@ -151,9 +146,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
-      - name: Prepare Bazel cache directory
-        run: mkdir -p ~/.cache/bazel
-
       - name: Get KernelSU HEAD hash
         run: |
           KSU_HASH=$(git ls-remote https://github.com/backslashxx/KernelSU \
@@ -161,34 +153,9 @@ jobs:
           echo "KSU_HASH=${KSU_HASH}" >> $GITHUB_ENV
           echo "KernelSU HEAD: ${KSU_HASH}"
 
-      - name: Restore Bazel cache
-        id: cache-bazel
-        uses: actions/cache/restore@v5
-        with:
-          path: ~/.cache/bazel
-          key: bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-${{ github.run_id }}
-          restore-keys: |
-            bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-
-            bazel-${{ inputs.kernel_version }}-
-
-      - name: Restore ccache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ inputs.kernel_version }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-${{ inputs.kernel_version }}-
-
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache
-          mkdir -p ~/.cache/ccache
-          ccache -M 10G
-
       - name: Cache the toolchain
         id: cache-toolchain
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             kernel-build-tools
@@ -219,15 +186,17 @@ jobs:
 
           echo "Cloning AnyKernel3..."
           git clone https://github.com/WildKernels/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
-          rm -rf AnyKernel3/.git
-
           echo "Preparing patch resources..."
           git clone https://github.com/WildKernels/kernel_patches.git
-          git clone https://github.com/Numbersf/Action-Build.git --depth 1
+          git clone https://github.com/Numbersf/Action-Build.git
 
-      - name: Restore kernel source cache
+          rm -rf AnyKernel3/.git
+          rm -rf kernel_patches/.git
+          rm -rf Action-Build/.git
+
+      - name: Cache kernel source cache
         id: cache-kernel-source
-        uses: actions/cache/restore@v5
+        uses: actions/cache@v5
         with:
           path: ${{ env.KERNEL_ROOT }}
           key: kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ env.MANIFEST_HASH }}
@@ -242,13 +211,6 @@ jobs:
           $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "common-${FORMATTED_BRANCH}" --repo-rev=v2.16
 
           $REPO --trace sync -c -j"$(nproc --all)" --no-tags --fail-fast
-
-      - name: Save kernel source cache
-        if: steps.cache-kernel-source.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.KERNEL_ROOT }}
-          key: kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ env.MANIFEST_HASH }}
 
       - name: Backup baseline defconfig
         run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
@@ -377,13 +339,12 @@ jobs:
 
       - name: Integrate NoMount
         if: ${{ inputs.enable_nomount != 'disabled' }}
-        working-directory: ${{ env.KERNEL_ROOT }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           NOMOUNT_BRANCH="${{ inputs.enable_nomount }}"
 
           echo "Integrating NoMount ($NOMOUNT_BRANCH)..."
 
-          cd common
           curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh" | bash -s "$NOMOUNT_BRANCH"
 
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
@@ -426,6 +387,7 @@ jobs:
             apply_line "$line" "$DEFCONFIG"
           done <<< "$CONFIGS"
 
+          rm -f $PATCH_FILE
           echo "Droidspaces integration complete"
 
       - name: x86_64 Emulation support
@@ -675,7 +637,7 @@ jobs:
           echo "Patching use_unlikely_wrap_cpufreq.patch"
           patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/use_unlikely_wrap_cpufreq.patch"
 
-          echo "✅ Other patches applied"
+          echo "[+] Other patches applied"
 
       - name: Configure Kernel Name
         working-directory: ${{ env.KERNEL_ROOT }}
@@ -740,6 +702,14 @@ jobs:
             fi
           fi
 
+      - name: Setup Bazel with caching
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
       - name: Compile Kernel
         id: compile_kernel
         uses: nick-fields/retry@v4
@@ -784,14 +754,10 @@ jobs:
                 FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
               fi
 
-              export CCACHE_DIR=/home/runner/.cache/ccache
-
               tools/bazel build \
                 --config=fast \
                 --lto=thin \
                 $FRAG_FLAG \
-                --disk_cache=/home/runner/.cache/bazel \
-                --action_env=CCACHE_DIR=/home/runner/.cache/ccache \
                 --action_env=PATH \
                 --copt="-mcpu=${TARGET_CPU}" \
                 --copt="-mtune=${TARGET_CPU}" \
@@ -814,135 +780,21 @@ jobs:
             } >> "$LOG_FILE"
             exit "$BUILD_STATUS"
 
-      - name: Save ccache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-${{ inputs.kernel_version }}-${{ github.run_id }}
-
-      - name: Save Bazel cache
-        uses: actions/cache/save@v5
-        with:
-          path: ~/.cache/bazel
-          key: bazel-${{ inputs.kernel_version }}-${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}-${{ github.run_id }}
-
-      - name: Delete previous Bazel cache
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create AnyKernel3 Zip
+        working-directory: ${{ env.ANYKERNEL3 }}
         run: |
-          PREFIX="bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-"
-          CURRENT="${PREFIX}${{ env.MANIFEST_HASH }}-${{ env.KSU_HASH }}"
-          echo "Checking for previous Bazel caches with prefix: $PREFIX"
-          gh cache list --repo ${{ github.repository }} --key "$PREFIX" --limit 100 --json key -q '.[].key' | \
-          while read -r k; do
-            if [ "$k" != "$CURRENT" ]; then
-              echo "Deleting previous Bazel cache: $k"
-              gh cache delete "$k" --repo ${{ github.repository }} || true
-            fi
-          done
-
-      - name: Collect Build Failure Logs
-        if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
-        env:
-          COMPILE_ATTEMPTS: ${{ steps.compile_kernel.outputs.total_attempts }}
-          COMPILE_EXIT_CODE: ${{ steps.compile_kernel.outputs.exit_code }}
-        run: |
-          LOG_DIR="$GITHUB_WORKSPACE/build-logs"
-          mkdir -p "$LOG_DIR"
-
-          {
-            echo "Android Version: ${{ inputs.android_version }}"
-            echo "Kernel Version: ${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
-            echo "OS Patch Level: ${{ inputs.os_patch_level }}"
-            echo "KernelSU Variant: ${{ inputs.ksu_variant }}"
-            echo "Config Name: ${CONFIG:-Unknown}"
-            echo "Git Commit: $GITHUB_SHA"
-            echo "Workflow URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo "Compile Attempts: ${COMPILE_ATTEMPTS:-Unknown}"
-            echo "Final Exit Code: ${COMPILE_EXIT_CODE:-Unknown}"
-            echo "KernelSU Commit Date: ${KSU_LATEST_COMMIT_DATE:-Unknown}"
-          } > "$LOG_DIR/summary.txt"
-
-          printf '%s\n' "${{ inputs.ksu_variant }}_kernel-${CONFIG}-Build-Logs" > "$LOG_DIR/artifact-name.txt"
-
-          df -h "$GITHUB_WORKSPACE" > "$LOG_DIR/disk-usage.txt" 2>&1 || true
-
-      - name: Upload Build Failure Logs
-        if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: xxksu-kernel-${{ env.CONFIG }}-Build-Logs
-          path: build-logs/
-          if-no-files-found: warn
-          retention-days: 7
-          compression-level: 9
-
-      - name: Prepare Boot Images
-        run: |
-          mkdir -p bootimgs
           SRC_DIR="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
 
-          cp "$SRC_DIR/Image" ./bootimgs/
-          [ -f "$SRC_DIR/Image.lz4" ] && cp "$SRC_DIR/Image.lz4" ./bootimgs/
-          cp "$SRC_DIR/Image" ./
-          [ -f "$SRC_DIR/Image.lz4" ] && cp "$SRC_DIR/Image.lz4" ./
-          gzip -n -k -f -9 ./Image > ./Image.gz
-
-      - name: Create AnyKernel3 Zip
-        run: |
-          cd "$ANYKERNEL3"
           ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
-          mv ../Image ./Image
-          zip -r "../$ZIP_NAME" ./*
 
-      - name: Collect Patch Conflict Files
-        run: |
-          REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
-          mkdir -p "$REJECTS_DIR"
-
-          mapfile -t REJS < <(find "$KERNEL_ROOT" -type f -name '*.rej')
-          REJ_COUNT=${#REJS[@]}
-          echo "Found $REJ_COUNT .rej file(s)"
-          echo "REJ_COUNT=$REJ_COUNT" >> $GITHUB_ENV
-
-          if [ "$REJ_COUNT" -gt 0 ]; then
-            for REJ in "${REJS[@]}"; do
-              REL="${REJ#"$KERNEL_ROOT"/}"
-              DEST="$REJECTS_DIR/$REL"
-              mkdir -p "$(dirname "$DEST")"
-              cp "$REJ" "$DEST"
-
-              ORIG="${REJ%.rej}"
-              if [ -f "$ORIG" ]; then
-                cp "$ORIG" "${DEST%.rej}"
-              fi
-              echo "$REL" >> "$REJECTS_DIR/index.txt"
-            done
-          fi
+          cp "$SRC_DIR/Image" ./Image
+          zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" ./*
 
       - name: Upload AnyKernel3 Package
+        if: ${{ success() }}
         uses: actions/upload-artifact@v6
         with:
           name: xxksu-kernel-${{ env.CONFIG }}-AnyKernel3
-          path: AnyKernel3/*
-          compression-level: 9
-
-      - name: Upload All Build Artifacts
-        if: inputs.artifact_upload_mode == 'all'
-        uses: actions/upload-artifact@v6
-        with:
-          name: xxksu-kernel-${{ env.CONFIG }}
-          path: |
-            *AnyKernel3.zip
-            *.img
-          compression-level: 9
-
-      - name: Upload Patch Conflict Files
-        if: always() && env.REJ_COUNT > 0
-        uses: actions/upload-artifact@v6
-        with:
-          name: xxksu-kernel-${{ env.CONFIG }}-rejects
-          path: patch-rejects/
-          if-no-files-found: ignore
+          path: ${{ github.workspace }}/*-AnyKernel3.zip
+          if-no-files-found: error
           compression-level: 9
