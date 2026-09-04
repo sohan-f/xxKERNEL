@@ -43,9 +43,6 @@ on:
         required: true
         type: boolean
         default: true
-      enable_susfs:
-        required: true
-        type: boolean
       enable_nomount:
         required: true
         type: string
@@ -78,7 +75,6 @@ jobs:
           echo "OSPL: ${{ inputs.os_patch_level }}"
           echo "KSU: ${{ inputs.ksu_variant }}"
           echo "Build Time: ${{ inputs.build_time }}"
-          echo "SUSFS: ${{ inputs.enable_susfs }}"
           echo "BBG: ${{ inputs.use_bbg }}"
           echo "Droidspaces: ${{ inputs.droidspaces }}"
           echo "NTSync: ${{ inputs.droidspaces_ntsync }}"
@@ -112,7 +108,6 @@ jobs:
           CONFIG=$CONFIG
           KERNEL_ROOT=$KERNEL_ROOT
           DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
-          SUSFS4KSU=$GITHUB_WORKSPACE/susfs4ksu
           KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
           ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
           ACTION_BUILD=$GITHUB_WORKSPACE/Action-Build
@@ -221,22 +216,14 @@ jobs:
       - name: Clone dependency repositories
         run: |
           ANYKERNEL_BRANCH="gki-2.0"
-          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
 
           echo "Cloning AnyKernel3..."
           git clone https://github.com/WildKernels/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           rm -rf AnyKernel3/.git
 
-          echo "Cloning SUSFS (branch: $SUSFS_BRANCH)..."
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
-
-          SUSFS_LATEST_COMMIT_DATE=$(git -C susfs4ksu log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')
-          echo "SUSFS_LATEST_COMMIT_DATE=$SUSFS_LATEST_COMMIT_DATE" >> $GITHUB_ENV
-          echo "SUSFS repository latest commit date: $SUSFS_LATEST_COMMIT_DATE"
-
           echo "Preparing patch resources..."
           git clone https://github.com/WildKernels/kernel_patches.git
-          git clone https://github.com/Numbersf/Action-Build.git --depth=1
+          git clone https://github.com/Numbersf/Action-Build.git --depth 1
 
       - name: Restore kernel source cache
         id: cache-kernel-source
@@ -252,17 +239,9 @@ jobs:
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
           echo "Initializing repo, branch: common-${FORMATTED_BRANCH}"
 
-          $REPO init \
-            --depth=1 \
-            -u https://android.googlesource.com/kernel/manifest \
-            -b "common-${FORMATTED_BRANCH}" \
-            --repo-rev=v2.16
+          $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "common-${FORMATTED_BRANCH}" --repo-rev=v2.16
 
-          $REPO --trace sync \
-            -c \
-            -j"$(nproc --all)" \
-            --no-tags \
-            --fail-fast
+          $REPO --trace sync -c -j"$(nproc --all)" --no-tags --fail-fast
 
       - name: Save kernel source cache
         if: steps.cache-kernel-source.outputs.cache-hit != 'true'
@@ -270,6 +249,9 @@ jobs:
         with:
           path: ${{ env.KERNEL_ROOT }}
           key: kernel-source-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ env.MANIFEST_HASH }}
+
+      - name: Backup baseline defconfig
+        run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
 
       - name: Apply Stock Config spoofing
         run: |
@@ -347,57 +329,46 @@ jobs:
             echo "KSU_LATEST_COMMIT_DATE=Unknown" >> $GITHUB_ENV
           fi
 
-      - name: Apply SUSFS Patch
-        if: inputs.enable_susfs
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          echo "Applying SUSFS patch..."
+          echo "Applying kernel configurations..."
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          read -r -d '' CONFIGS <<'EOF' || true
+          CONFIG_KSU=y
+          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
 
-          SUSFS_PATCH="50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
-          cp "$SUSFS4KSU/kernel_patches/$SUSFS_PATCH" ./common/
-          cp $SUSFS4KSU/kernel_patches/fs/* ./common/fs/
-          cp $SUSFS4KSU/kernel_patches/include/linux/* ./common/include/linux/
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
 
-          # Apply Official KernelSU-side SUSFS patch
-          cd ./KernelSU
-          cp $SUSFS4KSU/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
-          if grep -q '^diff --git a/kernel/Makefile b/kernel/Makefile' ./10_enable_susfs_for_ksu.patch \
-            && ! grep -q '^diff --git a/kernel/Kbuild b/kernel/Kbuild' ./10_enable_susfs_for_ksu.patch; then
-            sed -i 's|kernel/Makefile|kernel/Kbuild|g' ./10_enable_susfs_for_ksu.patch
-          fi
-          patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
-          cd ..
+          CONFIG_HZ_300=y
+          CONFIG_PREEMPT=y
+          CONFIG_NO_HZ_IDLE=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_CPU_IDLE_GOV_MENU=y
+          CONFIG_CPU_FREQ=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
 
-          cd $KERNEL_ROOT/common
+          CONFIG_TRANSPARENT_HUGEPAGE=y
+          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+          CONFIG_SLUB=y
+          CONFIG_SLUB_CPU_PARTIAL=y
 
-          # Compatibility fix for kernels missing VMA_PAD_START interface
-          if grep -qF 'VMA_PAD_START(vma)' "$SUSFS_PATCH" \
-            && ! grep -Rqs 'VMA_PAD_START' ./include/linux; then
-            echo "Target kernel does not provide VMA_PAD_START; using vma->vm_end for SUSFS OPEN_REDIRECT compatibility"
-            sed -i 's/VMA_PAD_START(vma)/vma->vm_end/g' "$SUSFS_PATCH"
-          fi
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_BFQ_GROUP_IOSCHED=y
 
-          # Apply main patch
-          patch -p1 < "$SUSFS_PATCH" || true
+          CONFIG_PM_AUTOSLEEP=y
+          CONFIG_PM_WAKELOCKS=y
+          CONFIG_CPU_THERMAL=y
+          CONFIG_DEVFREQ_THERMAL=y
 
-          # Fix base.c header hunk mismatch resulting in missing susfs_def.h
-          if grep -q 'AS_FLAGS_SUS_MAP\|susfs_is_current_proc_umounted\|SUSFS_IS_INODE_SUS_MAP\|SUSFS_IS_INODE_OPEN_REDIRECT' ./fs/proc/base.c && ! grep -qF 'susfs_def.h' ./fs/proc/base.c; then
-            if ! grep -qF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
-              sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
-            fi
-            sed -i '/#include <linux\/dma-buf.h>/a #endif' ./fs/proc/base.c
-            sed -i '/#include <linux\/dma-buf.h>/a #include <linux\/susfs_def.h>' ./fs/proc/base.c
-            sed -i '/#include <linux\/dma-buf.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)' ./fs/proc/base.c
-          fi
+          CONFIG_LTO_CLANG_THIN=y
+          EOF
 
-          # Fix memory.c missing susfs_def.h
-          if grep -q 'SUSFS_IS_INODE_SUS_MAP' ./mm/memory.c && ! grep -qF '#include <linux/susfs_def.h>' ./mm/memory.c; then
-            if grep -qF '#include <linux/zswap.h>' ./mm/memory.c; then
-              sed -i '/#include <linux\/zswap.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
-            else
-              sed -i '/#include <linux\/sched\/sysctl.h>/a #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux\/susfs_def.h>\n#endif' ./mm/memory.c
-            fi
-          fi
+          while IFS= read -r line || [ -n "$line" ]; do
+            apply_line "$line" "$DEFCONFIG"
+          done <<< "$CONFIGS"
+
+          sed -i 's/check_defconfig//' ./common/build.config.gki
 
       - name: Integrate NoMount
         if: ${{ inputs.enable_nomount != 'disabled' }}
@@ -408,31 +379,21 @@ jobs:
           echo "Integrating NoMount ($NOMOUNT_BRANCH)..."
 
           cd common
-          curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh" \
-            | bash -s "$NOMOUNT_BRANCH"
+          curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh" | bash -s "$NOMOUNT_BRANCH"
+
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          apply_line "CONFIG_NOMOUNT=y" "$DEFCONFIG"
 
           echo "NoMount integration completed successfully."
-
-      - name: Clone Droidspaces patch repository
-        if: inputs.droidspaces != 'off'
-        run: |
-          git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
-          echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
-
-      - name: Backup baseline defconfig
-        run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
 
       - name: Integrate Droidspaces support
         if: inputs.droidspaces != 'off'
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          SLOT="${{ inputs.droidspaces }}"
+          PATCH_FILE=/tmp/droidspaces.patch
 
-          # Format slot name (e.g., 678 -> 6_7_8)
-          SLOT_NAME=$(echo "$SLOT" | sed 's/\(.\)/\1_/g; s/_$//')
-          echo "Applying Droidspaces SYSVIPC kABI fix patch (Slot: $SLOT / $SLOT_NAME)..."
+          curl -LSs "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/refs/heads/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" -o $PATCH_FILE
 
-          PATCH_FILE="$DROIDSPACES_PATCHES/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
           if ! patch -p1 --forward < "$PATCH_FILE"; then
             echo "::warning::Failed to apply SYSVIPC kABI patch; it may already be applied or context mismatched"
           fi
@@ -496,20 +457,9 @@ jobs:
 
           echo "Enabling CONFIG_NTSYNC..."
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          read -r -d '' CONFIGS <<'EOF' || true
-          CONFIG_NTSYNC=y
-          EOF
-
-          while IFS= read -r line || [ -n "$line" ]; do
-            apply_line "$line" "$DEFCONFIG"
-          done <<< "$CONFIGS"
+          apply_line "CONFIG_NTSYNC=y" "$DEFCONFIG"
 
           echo "NTSync patch and configuration injection complete."
-
-      - name: Apply Unicode Bypass Fix
-        if: inputs.enable_susfs
-        working-directory: ${{ env.KERNEL_ROOT }}/common
-        run: patch -p1 --forward < "$ACTION_BUILD/patches/unicode_bypass_fix_6.1+.patch" || true
 
       - name: Apply BBG Patch
         if: inputs.use_bbg
@@ -521,9 +471,8 @@ jobs:
 
       - name: Network patches apply
         if: inputs.use_networking
-        working-directory: ${{ env.KERNEL_ROOT }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          cd common
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
 
           echo "Applying bbrv3 patches"
@@ -634,14 +583,13 @@ jobs:
 
       - name: Apply Experimental Patches
         if: inputs.use_perf
-        working-directory: ${{ env.KERNEL_ROOT }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           set -euo pipefail
 
           KERNEL_VERSION="${{ inputs.kernel_version }}"
           MIN_VERSION="5.16"
 
-          cd common
           patch -p1 --forward < "$KERNEL_PATCHES/common/optimized_mem_operations.patch"
           patch -p1 --forward < "$KERNEL_PATCHES/common/file_struct_8bytes_align.patch"
           patch -p1 --forward < "$KERNEL_PATCHES/common/reduce_cache_pressure.patch"
@@ -724,83 +672,6 @@ jobs:
 
           echo "✅ Other patches applied"
 
-      - name: Configure Kernel Options
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          echo "Applying kernel configurations..."
-          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          read -r -d '' CONFIGS <<'EOF' || true
-          CONFIG_KSU=y
-          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-
-          CONFIG_HZ_300=y
-          CONFIG_PREEMPT=y
-          CONFIG_NO_HZ_IDLE=y
-          CONFIG_CPU_IDLE=y
-          CONFIG_CPU_IDLE_GOV_MENU=y
-          CONFIG_CPU_FREQ=y
-          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-
-          CONFIG_TRANSPARENT_HUGEPAGE=y
-          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
-          CONFIG_SLUB=y
-          CONFIG_SLUB_CPU_PARTIAL=y
-
-          CONFIG_MQ_IOSCHED_KYBER=y
-          CONFIG_IOSCHED_BFQ=y
-          CONFIG_BFQ_GROUP_IOSCHED=y
-
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_DEFAULT_TCP_CONG="bbr"
-          CONFIG_NET_SCH_FQ=y
-
-          CONFIG_PM_AUTOSLEEP=y
-          CONFIG_PM_WAKELOCKS=y
-          CONFIG_CPU_THERMAL=y
-          CONFIG_DEVFREQ_THERMAL=y
-
-          CONFIG_LTO_CLANG_THIN=y
-          EOF
-
-          while IFS= read -r line || [ -n "$line" ]; do
-            apply_line "$line" "$DEFCONFIG"
-          done <<< "$CONFIGS"
-
-          sed -i 's/check_defconfig//' ./common/build.config.gki
-
-      - name: Configure SUSFS options
-        if: inputs.enable_susfs
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          read -r -d '' CONFIGS <<'EOF' || true
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          EOF
-
-          while IFS= read -r line || [ -n "$line" ]; do
-            apply_line "$line" "$DEFCONFIG"
-          done <<< "$CONFIGS"
-
-      - name: Enable nomount meta module
-        if: ${{ inputs.enable_nomount != 'disabled' }}
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          apply_line "CONFIG_NOMOUNT=y" "$DEFCONFIG"
-
       - name: Configure Kernel Name
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
@@ -849,7 +720,6 @@ jobs:
             DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"
           fi
 
-          echo "Using build time: $DATESTR"
           echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_USER="sohan" >> "$GITHUB_ENV"
@@ -893,7 +763,6 @@ jobs:
               echo "Compile attempt: $ATTEMPT"
               echo "Start time: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
               echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
-              echo "Current SUSFS latest commit date: ${SUSFS_LATEST_COMMIT_DATE}"
               set -ex
               cd "$KERNEL_ROOT"
 
@@ -931,7 +800,6 @@ jobs:
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
 
               echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE}"
-              echo "Current SUSFS latest commit date: ${SUSFS_LATEST_COMMIT_DATE}"
             } 2>&1 | tee "$LOG_FILE"
 
             BUILD_STATUS=${PIPESTATUS[0]}
@@ -989,7 +857,6 @@ jobs:
             echo "Compile Attempts: ${COMPILE_ATTEMPTS:-Unknown}"
             echo "Final Exit Code: ${COMPILE_EXIT_CODE:-Unknown}"
             echo "KernelSU Commit Date: ${KSU_LATEST_COMMIT_DATE:-Unknown}"
-            echo "SUSFS Commit Date: ${SUSFS_LATEST_COMMIT_DATE:-Unknown}"
           } > "$LOG_DIR/summary.txt"
 
           printf '%s\n' "${{ inputs.ksu_variant }}_kernel-${CONFIG}-Build-Logs" > "$LOG_DIR/artifact-name.txt"
@@ -1000,7 +867,7 @@ jobs:
         if: ${{ always() && steps.compile_kernel.outcome == 'failure' }}
         uses: actions/upload-artifact@v6
         with:
-          name: Official_kernel-${{ env.CONFIG }}-Build-Logs
+          name: xxksu-kernel-${{ env.CONFIG }}-Build-Logs
           path: build-logs/
           if-no-files-found: warn
           retention-days: 7
@@ -1018,20 +885,13 @@ jobs:
           gzip -n -k -f -9 ./Image > ./Image.gz
 
       - name: Create AnyKernel3 Zip
-        if: inputs.artifact_upload_mode == 'all'
         run: |
           cd "$ANYKERNEL3"
           ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
 
-      - name: Prepare AnyKernel3 Directory
-        if: inputs.artifact_upload_mode != 'all'
-        run: |
-          mv ./Image "$ANYKERNEL3/Image"
-
       - name: Collect Patch Conflict Files
-        if: always()
         run: |
           REJECTS_DIR="$GITHUB_WORKSPACE/patch-rejects"
           mkdir -p "$REJECTS_DIR"
@@ -1057,10 +917,9 @@ jobs:
           fi
 
       - name: Upload AnyKernel3 Package
-        if: inputs.artifact_upload_mode != 'all'
         uses: actions/upload-artifact@v6
         with:
-          name: Official_kernel-${{ env.CONFIG }}-AnyKernel3
+          name: xxksu-kernel-${{ env.CONFIG }}-AnyKernel3
           path: AnyKernel3/*
           compression-level: 9
 
@@ -1068,7 +927,7 @@ jobs:
         if: inputs.artifact_upload_mode == 'all'
         uses: actions/upload-artifact@v6
         with:
-          name: Official_kernel-${{ env.CONFIG }}
+          name: xxksu-kernel-${{ env.CONFIG }}
           path: |
             *AnyKernel3.zip
             *.img
@@ -1078,7 +937,7 @@ jobs:
         if: always() && env.REJ_COUNT > 0
         uses: actions/upload-artifact@v6
         with:
-          name: Official_kernel-${{ env.CONFIG }}-Rejects
+          name: xxksu-kernel-${{ env.CONFIG }}-rejects
           path: patch-rejects/
           if-no-files-found: ignore
           compression-level: 9
