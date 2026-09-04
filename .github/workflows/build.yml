@@ -345,16 +345,14 @@ jobs:
           CONFIG_CPU_IDLE=y
           CONFIG_CPU_IDLE_GOV_MENU=y
           CONFIG_CPU_FREQ=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_SCHED_THERMAL_PRESSURE=y
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
 
-          CONFIG_TRANSPARENT_HUGEPAGE=y
-          CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
           CONFIG_SLUB=y
           CONFIG_SLUB_CPU_PARTIAL=y
-
-          CONFIG_MQ_IOSCHED_KYBER=y
-          CONFIG_IOSCHED_BFQ=y
-          CONFIG_BFQ_GROUP_IOSCHED=y
 
           CONFIG_PM_AUTOSLEEP=y
           CONFIG_PM_WAKELOCKS=y
@@ -362,6 +360,13 @@ jobs:
           CONFIG_DEVFREQ_THERMAL=y
 
           CONFIG_LTO_CLANG_THIN=y
+
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
+          CONFIG_F2FS_FS_COMPRESSION=y
+
+          CONFIG_BPF_JIT=y
+          CONFIG_BPF_JIT_ALWAYS_ON=y
           EOF
 
           while IFS= read -r line || [ -n "$line" ]; do
