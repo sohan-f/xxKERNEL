@@ -5,8 +5,6 @@ permissions:
   actions: write
 
 on:
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       kernelsu_variant:
@@ -65,21 +63,7 @@ on:
         default: true
 
 jobs:
-  flush-cache:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Flush GitHub Actions cache
-        run: |
-          gh cache list --json id --jq '.[].id' | \
-          xargs -I{} gh cache delete {}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-
   build-kernels-a15-6-6:
-    needs: flush-cache
-    if: always() && (needs.flush-cache.result == 'success' || needs.flush-cache.result == 'skipped')
     name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
     strategy:
       fail-fast: false

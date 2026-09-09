@@ -109,7 +109,6 @@ jobs:
           AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool
           MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
           UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py
-          BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
           EOF
 
           mkdir -p "$GITHUB_WORKSPACE/git-repo"
@@ -153,30 +152,8 @@ jobs:
           echo "KSU_HASH=${KSU_HASH}" >> $GITHUB_ENV
           echo "KernelSU HEAD: ${KSU_HASH}"
 
-      - name: Cache the toolchain
-        id: cache-toolchain
-        uses: actions/cache@v6
-        with:
-          path: |
-            kernel-build-tools
-            mkbootimg
-          key: toolchain-${{ runner.os }}-v1
-
-      - name: Download the toolchain
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          AOSP_MIRROR=https://android.googlesource.com
-          BRANCH=main-kernel-2025
-          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
-          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
-
       - name: Generate signing key and configure Git
         run: |
-          openssl genpkey \
-            -algorithm RSA \
-            -pkeyopt rsa_keygen_bits:2048 \
-            > "$BOOT_SIGN_KEY_PATH"
-
           git config --global user.name "builder"
           git config --global user.email "builder@example.com"
 
