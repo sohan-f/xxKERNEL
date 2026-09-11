@@ -479,6 +479,7 @@ jobs:
           done <<< "$CONFIGS"
 
       - name: Enable ZRAM
+        if: false
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           echo "Setup env"
