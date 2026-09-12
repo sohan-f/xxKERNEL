@@ -105,7 +105,6 @@ jobs:
           DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
           KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
           ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
-          ACTION_BUILD=$GITHUB_WORKSPACE/Action-Build
           AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool
           MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
           UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py
@@ -159,17 +158,15 @@ jobs:
 
       - name: Clone dependency repositories
         run: |
-          ANYKERNEL_BRANCH="gki-2.0"
+          ANYKERNEL_BRANCH="cuscoi"
 
           echo "Cloning AnyKernel3..."
-          git clone https://github.com/WildKernels/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
+          git clone https://github.com/sohan-f/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           echo "Preparing patch resources..."
           git clone https://github.com/WildKernels/kernel_patches.git
-          git clone https://github.com/Numbersf/Action-Build.git
 
           rm -rf AnyKernel3/.git
           rm -rf kernel_patches/.git
-          rm -rf Action-Build/.git
 
       - name: Restore kernel source
         id: restore-kernel-source
