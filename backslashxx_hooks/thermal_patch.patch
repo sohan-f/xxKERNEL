@@ -1,0 +1,16 @@
+diff --git a/drivers/thermal/thermal_helpers.c b/drivers/thermal/thermal_helpers.c
+index 6fdfa7090..83334c76a 100644
+--- a/drivers/thermal/thermal_helpers.c
++++ b/drivers/thermal/thermal_helpers.c
+@@ -92,6 +92,10 @@ int __thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp)
+ 
+ 	ret = tz->ops->get_temp(tz, temp);
+ 
++    if (!ret && *temp == -273000) {
++		*temp = 25000;
++	}
++
+ 	if (IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) {
+ 		for (count = 0; count < tz->num_trips; count++) {
+ 			ret = __thermal_zone_get_trip(tz, count, &trip);
+

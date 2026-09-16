@@ -250,9 +250,11 @@ jobs:
           echo "Adding backslashxx KernelSU..."
           curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s $BRANCH
 
-          # cd common
+          cd common
           # patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
-          # cd ..
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
+          cd ..
+
           cd KernelSU
           KSU_GIT_VERSION=$(git rev-list --count HEAD)
           KSU_VERSION=$((20000 + KSU_GIT_VERSION))
