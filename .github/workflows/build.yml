@@ -725,8 +725,7 @@ jobs:
                   --config=fast \
                   $FRAG_FLAG \
                   --action_env=PATH \
-                  --copt="-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop" \
-                  --copt="-mtune=cortex-a78" \
+                  --action_env='KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=cortex-a78' \
                   //common:kernel_aarch64_autofdo_dist || exit 1
 
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
