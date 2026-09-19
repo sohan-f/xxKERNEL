@@ -682,7 +682,7 @@ jobs:
         uses: nick-fields/retry@v4
         with:
           shell: bash
-          timeout_minutes: 30
+          timeout_minutes: 60
           max_attempts: 3
           retry_on: timeout
           command: |
