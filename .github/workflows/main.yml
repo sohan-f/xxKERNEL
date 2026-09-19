@@ -30,7 +30,7 @@ on:
           - "disabled"
           - "master"
           - "dev"
-        default: "dev"
+        default: "disabled"
       droidspaces:
         description: "Droidspaces container support"
         required: false
