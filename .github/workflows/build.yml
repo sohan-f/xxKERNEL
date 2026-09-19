@@ -179,12 +179,33 @@ jobs:
         if: steps.restore-kernel-source.outputs.cache-hit != 'true'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
-          echo "Initializing repo, branch: common-${FORMATTED_BRANCH}"
+          # FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
+          # echo "Initializing repo, branch: common-${FORMATTED_BRANCH}"
+          #
+          # $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "common-${FORMATTED_BRANCH}" --repo-rev=v2.16
+          #
+          # $REPO --trace sync -c -j"$(nproc --all)" --no-tags --fail-fast
 
-          $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "common-${FORMATTED_BRANCH}" --repo-rev=v2.16
+          set -e
 
-          $REPO --trace sync -c -j"$(nproc --all)" --no-tags --fail-fast
+          echo "Initializing Android 15 6.6 LTS kernel..."
+
+          $REPO init \
+            --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b common-android15-6.6-lts \
+            --repo-rev=v2.16
+
+          $REPO sync \
+            -c \
+            -j"$(nproc --all)" \
+            --no-tags \
+            --fail-fast
+
+          echo "Kernel revision:"
+          git -C common log -1 --oneline
+          echo "Kernel branch:"
+          git -C common branch --show-current
 
       - name: Cache kernel source
         if: steps.restore-kernel-source.outputs.cache-hit != 'true'
@@ -251,7 +272,7 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s $BRANCH
 
           cd common
-          # patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
           cd ..
 
@@ -274,15 +295,16 @@ jobs:
             echo "KSU_LATEST_COMMIT_DATE=Unknown" >> $GITHUB_ENV
           fi
 
+          # CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
           echo "Applying kernel configurations..."
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
           read -r -d '' CONFIGS <<'EOF' || true
           CONFIG_KSU=y
-          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
 
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_AUTOFDO_CLANG=y
 
           CONFIG_HZ_300=y
           CONFIG_PREEMPT=y
@@ -574,22 +596,38 @@ jobs:
           sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
           sed -i '/kmi_symbol_list_strict_mode/d' ./common/BUILD.bazel
           rm -rf ./common/android/abi_gki_protected_exports_*
-          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+          sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
 
           VERSION_INPUT=$(echo "${{ inputs.version }}" | tr -d '[:space:]')
           if [ -n "$VERSION_INPUT" ]; then
             CLEAN_VERSION=$(echo "$VERSION_INPUT" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//')
-            perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${CLEAN_VERSION}"'"/s' ./common/scripts/setlocalversion 2>/dev/null || true
-            sed -i "\$s|echo \"\$res\"|echo \"${CLEAN_VERSION}\"|" ./common/scripts/setlocalversion 2>/dev/null || true
-            sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="'"$CLEAN_VERSION"'"/' ./common/arch/arm64/configs/gki_defconfig
+
+            perl -i -0777 -pe \
+              's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${CLEAN_VERSION}"'"/s' \
+              ./common/scripts/setlocalversion 2>/dev/null || true
+
+            sed -i "\$s|echo \"\$res\"|echo \"${CLEAN_VERSION}\"|" \
+              ./common/scripts/setlocalversion 2>/dev/null || true
+
+            sed -i '/^CONFIG_LOCALVERSION=/ s/="[^"]*"/="'"$CLEAN_VERSION"'"/' \
+              ./common/arch/arm64/configs/gki_defconfig
+
           else
             cd ./common
+
             BID="ab10000069"
             GHASH=$(git rev-parse --verify HEAD | cut -c1-13)
             KMI_TAG="android15-8"
+
             SUFFIX="-${KMI_TAG}-g${GHASH}-${BID}"
-            perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${SUFFIX}"'\$\{config_localversion\}"/s' ./scripts/setlocalversion 2>/dev/null || true
+
+            perl -i -0777 -pe \
+              's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${SUFFIX}"'"/s' \
+              ./scripts/setlocalversion
           fi
+
+          echo "Expected kernel version:"
+          make -s kernelversion
 
       - name: Set Custom Build Time
         shell: bash
@@ -630,6 +668,14 @@ jobs:
               perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
             fi
           fi
+
+      - name: Verify Kernel Version
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          echo "Git commit: $(git rev-parse HEAD)"
+          echo "Git describe: $(git describe --always --dirty --long)"
+          echo "Kernel version: $(make -s kernelversion)"
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)' Makefile
 
       - name: Compile Kernel
         id: compile_kernel
@@ -676,18 +722,12 @@ jobs:
               fi
 
               tools/bazel build \
-                --config=fast \
-                --lto=thin \
-                $FRAG_FLAG \
-                --action_env=PATH \
-                --copt="-mcpu=${TARGET_CPU}" \
-                --copt="-mtune=${TARGET_CPU}" \
-                --copt="-fomit-frame-pointer" \
-                --copt="-ffunction-sections" \
-                --copt="-fdata-sections" \
-                --copt="-fno-unwind-tables" \
-                --copt="-fno-asynchronous-unwind-tables" \
-                //common:kernel_aarch64_dist || exit 1
+                  --config=fast \
+                  $FRAG_FLAG \
+                  --action_env=PATH \
+                  --copt="-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop" \
+                  --copt="-mtune=cortex-a78" \
+                  //common:kernel_aarch64_autofdo_dist || exit 1
 
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
 
