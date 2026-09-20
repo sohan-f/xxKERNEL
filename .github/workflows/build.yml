@@ -218,6 +218,7 @@ jobs:
         run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
 
       - name: Apply Stock Config spoofing
+        if: false
         run: |
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
           STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
