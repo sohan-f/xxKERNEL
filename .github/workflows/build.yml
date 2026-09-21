@@ -335,6 +335,11 @@ jobs:
 
           CONFIG_BPF_JIT=y
           CONFIG_BPF_JIT_ALWAYS_ON=y
+
+          CONFIG_KASAN=n
+          CONFIG_SLUB_DEBUG=n
+          CONFIG_FTRACE=n
+          CONFIG_DEBUG_MISC=n
           EOF
 
           while IFS= read -r line || [ -n "$line" ]; do
