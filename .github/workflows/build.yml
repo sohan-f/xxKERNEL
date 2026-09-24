@@ -71,6 +71,10 @@ jobs:
           echo "Android: ${{ inputs.android_version }}"
           echo "Kernel: ${{ inputs.kernel_version }}-lts (tracking common-${{ inputs.android_version }}-${{ inputs.kernel_version }}-lts)"
           echo "KSU: ${{ inputs.ksu_variant }} (${{ inputs.flavor }})"
+          echo "Build Time: ${{ inputs.build_time }}"
+          echo "BBG: ${{ inputs.use_bbg }}"
+          echo "Droidspaces: ${{ inputs.droidspaces }}"
+          echo "NTSync: ${{ inputs.droidspaces_ntsync }}"
 
       - name: Clean up disk space
         uses: endersonmenezes/free-disk-space@v3
@@ -134,6 +138,10 @@ jobs:
       - name: Finalize source
         id: source
         run: bash .github/scripts/finalize-source.sh
+
+      - name: Stock spoofing (disabled)
+        if: false
+        run: bash .github/scripts/stock-spoof.sh
 
       - name: KernelSU
         env:
