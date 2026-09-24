@@ -104,6 +104,7 @@ jobs:
         env:
           ANDROID_VERSION: ${{ inputs.android_version }}
           KERNEL_VERSION: ${{ inputs.kernel_version }}
+          FLAVOR: ${{ inputs.flavor }}
         run: bash .github/scripts/manifest.sh
 
       - name: Cleanup cache
@@ -113,6 +114,14 @@ jobs:
           KERNEL_VERSION: ${{ inputs.kernel_version }}
           MANIFEST_HASH: ${{ env.MANIFEST_HASH }}
         run: bash .github/scripts/cleanup-cache.sh
+
+      - name: Restore bazel cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: ${{ env.BAZEL_CACHE_KEY }}
+          restore-keys: |
+            bazel-disk-${{ inputs.android_version }}-${{ inputs.kernel_version }}-lts-${{ inputs.flavor }}-
 
       - name: Restore source
         id: restore
@@ -192,6 +201,19 @@ jobs:
 
       - name: Package
         run: bash .github/scripts/package.sh
+
+      - name: Rotate bazel cache key
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache delete "${{ env.BAZEL_CACHE_KEY }}" --repo ${{ github.repository }} || true
+
+      - name: Save bazel cache
+        if: success()
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: ${{ env.BAZEL_CACHE_KEY }}
 
       - name: Upload AnyKernel3
         if: ${{ success() }}

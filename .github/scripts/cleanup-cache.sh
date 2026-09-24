@@ -17,3 +17,16 @@ while read -r k; do
     gh cache delete "$k" --repo "$GITHUB_REPOSITORY" || true
   fi
 done
+
+BZ_PREFIX="bazel-disk-${ANDROID_VERSION}-${KERNEL_VERSION}-lts-"
+echo "Pruning stale bazel disk caches with prefix: $BZ_PREFIX (keeping *${MANIFEST_HASH})"
+gh cache list --repo "$GITHUB_REPOSITORY" --key "$BZ_PREFIX" --limit 100 --json key -q '.[].key' | \
+while read -r k; do
+  case "$k" in
+    *"$MANIFEST_HASH") ;;
+    *)
+      echo "Deleting stale bazel disk cache: $k"
+      gh cache delete "$k" --repo "$GITHUB_REPOSITORY" || true
+      ;;
+  esac
+done

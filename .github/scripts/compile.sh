@@ -24,6 +24,7 @@ set -o pipefail
 
   tools/bazel build \
       --config=fast \
+      --disk_cache="$BAZEL_DISK_CACHE" \
       $FRAG_FLAG \
       --action_env=PATH \
       --action_env='KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=cortex-a78' \
@@ -36,6 +37,8 @@ set -o pipefail
     exit 1
   fi
   strings "$IMAGE" | grep 'Linux version'
+
+  echo "Bazel disk cache size: $(du -sh "$BAZEL_DISK_CACHE" | cut -f1)"
 
   echo "Current KernelSU latest commit date: ${KSU_LATEST_COMMIT_DATE:-Unknown}"
 } 2>&1 | tee "$LOG_FILE"
