@@ -6,7 +6,7 @@ index 6fdfa7090..83334c76a 100644
  
  	ret = tz->ops->get_temp(tz, temp);
  
-+    if (!ret && *temp == -273000) {
++	if (!ret && *temp == -273000) {
 +		*temp = 25000;
 +	}
 +

@@ -22,7 +22,7 @@ on:
         description: "Custom build time (optional, N or blank = current UTC)"
         required: false
         type: string
-        default: "Thu Jul 16 14:32:05 UTC 2026"
+        default: ""
       enable_nomount:
         required: true
         type: choice
@@ -61,24 +61,30 @@ on:
         required: true
         type: boolean
         default: true
+      flavor:
+        description: "Tuning flavor"
+        required: true
+        type: choice
+        options:
+          - perf
+          - battery
+        default: perf
+      create_release:
+        description: "Create GitHub Release with AnyKernel3 zip"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build-kernels-a15-6-6:
-    name: "6.6.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - sub_level: "139"
-            os_patch_level: "2026-07"
+    name: "6.6-lts-${{ inputs.flavor }}"
     uses: ./.github/workflows/build.yml
     secrets: inherit
     with:
       android_version: "android15"
       kernel_version: "6.6"
-      sub_level: ${{ matrix.sub_level }}
-      os_patch_level: ${{ matrix.os_patch_level }}
       ksu_variant: ${{ inputs.kernelsu_variant }}
+      flavor: ${{ inputs.flavor }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_bbg: ${{ inputs.use_bbg }}
@@ -87,3 +93,44 @@ jobs:
       enable_nomount: ${{ inputs.enable_nomount }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}
       droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+
+  release:
+    name: "release"
+    needs: build-kernels-a15-6-6
+    if: ${{ inputs.create_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download AnyKernel3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-AnyKernel3"
+          merge-multiple: true
+          path: ./release/ak3
+
+      - name: Zip and release
+        env:
+          FLAVOR: ${{ inputs.flavor }}
+          KSU_VARIANT: ${{ inputs.kernelsu_variant }}
+          CUSTOM_VERSION: ${{ inputs.version || '' }}
+          SUBLEVEL: ${{ needs.build-kernels-a15-6-6.outputs.actual-sublevel }}
+        run: |
+          set -euo pipefail
+          ls -la ./release/ak3
+          test -f ./release/ak3/Image || { echo "::error::Image missing in artifact"; exit 1; }
+          STAMP="$(date -u +'%Y%m%d')"
+          SUB="${SUBLEVEL:-lts}"
+          ZIP="xxKERNEL-6.6.${SUB}-lts-${FLAVOR}.zip"
+          ( cd ./release/ak3 && zip -r "../${ZIP}" . )
+          if [ -n "$CUSTOM_VERSION" ]; then
+            TAG="$(echo "$CUSTOM_VERSION" | tr -d '[:space:]' | tr '/' '-')"
+          else
+            TAG="v6.6.${SUB}-lts-${FLAVOR}-${STAMP}-r${GITHUB_RUN_NUMBER}"
+          fi
+          echo "Releasing $TAG ($ZIP)"
+          gh release create "$TAG" "./release/${ZIP}" \
+            --title "$TAG" \
+            --notes "android15-6.6 LTS (SUBLEVEL $SUB) / $KSU_VARIANT / $FLAVOR / run ${GITHUB_RUN_NUMBER}" \
+            || gh release upload "$TAG" "./release/${ZIP}" --clobber
