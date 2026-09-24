@@ -269,6 +269,7 @@ jobs:
 
           cd common
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_security_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
           cd ..
 
@@ -330,9 +331,27 @@ jobs:
           CONFIG_BPF_JIT=y
           CONFIG_BPF_JIT_ALWAYS_ON=y
 
-          CONFIG_KASAN=n
-          CONFIG_SLUB_DEBUG=n
-          CONFIG_DEBUG_MISC=n
+          CONFIG_SECURITY_SELINUX=y
+          CONFIG_SECCOMP=y
+          CONFIG_JUMP_LABEL=y
+
+          CONFIG_KSU_LSM_SECURITY_HOOKS=n
+
+          CONFIG_KSU_TAMPER_SYSCALL_TABLE=n
+          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=n
+
+          CONFIG_KSU_KPROBES_KSUD=n
+
+          CONFIG_KSU_ENABLE_FULL_UID_CHECKS=n
+
+          CONFIG_KSU_SHELL_HAS_SU_ALWAYS=y
+          CONFIG_KSU_NOPRINTK=y
+          CONFIG_KSU_FEATURE_SULOG=y
+          CONFIG_KSU_FEATURE_ADBROOT=n
+
+          CONFIG_KSU_DEBUG=n
+          CONFIG_KSU_HOSTSREDIRECT=n
+          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=n
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
