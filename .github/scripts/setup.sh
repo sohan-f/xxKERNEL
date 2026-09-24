@@ -9,7 +9,8 @@ set -euo pipefail
 
 CONFIG="${ANDROID_VERSION}-${KERNEL_VERSION}-lts"
 KERNEL_ROOT="$GITHUB_WORKSPACE/$CONFIG"
-mkdir -p "$KERNEL_ROOT"
+BAZEL_DISK_CACHE="$HOME/.cache/bazel-disk"
+mkdir -p "$KERNEL_ROOT" "$BAZEL_DISK_CACHE"
 
 cat >> "$GITHUB_ENV" << EOF
 CONFIG=$CONFIG
@@ -17,9 +18,8 @@ KERNEL_ROOT=$KERNEL_ROOT
 DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
 KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
 ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
-BAZEL_DISK_CACHE=$HOME/.cache/bazel-disk
+BAZEL_DISK_CACHE=$BAZEL_DISK_CACHE
 EOF
-mkdir -p "$BAZEL_DISK_CACHE"
 
 mkdir -p "$GITHUB_WORKSPACE/git-repo"
 curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$GITHUB_WORKSPACE/git-repo/repo"
