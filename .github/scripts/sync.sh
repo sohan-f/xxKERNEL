@@ -8,6 +8,8 @@ set -euo pipefail
 : "${REPO:?}"
 : "${KERNEL_ROOT:?}"
 
+cd "$KERNEL_ROOT"
+
 FORMATTED_BRANCH="${ANDROID_VERSION}-${KERNEL_VERSION}-lts"
 echo "Initializing repo, branch: common-${FORMATTED_BRANCH}"
 

@@ -26,6 +26,7 @@ apply_conf() {
 
 if [[ "$ENABLE_NOMOUNT" != "disabled" ]]; then
   echo "Integrating NoMount ($ENABLE_NOMOUNT)..."
+  cd "$KERNEL_ROOT/common"
   curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/${ENABLE_NOMOUNT}/kernel/setup.sh" | bash -s "$ENABLE_NOMOUNT"
   ( cd "$KERNEL_ROOT/common" && apply_line "CONFIG_NOMOUNT=y" "$DEFCONFIG" )
   echo "NoMount integration completed successfully."
@@ -33,6 +34,7 @@ fi
 
 if [[ "$DROIDSPACES" != "off" ]]; then
   echo "Integrating Droidspaces..."
+  cd "$KERNEL_ROOT/common"
   PATCH_FILE=/tmp/droidspaces.patch
   curl -LSs "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/refs/heads/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" -o "$PATCH_FILE"
   if ! patch -p1 --forward < "$PATCH_FILE"; then

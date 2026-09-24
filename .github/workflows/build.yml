@@ -123,10 +123,11 @@ jobs:
 
       - name: Sync source
         if: steps.restore.outputs.cache-hit != 'true'
+        working-directory: ${{ env.KERNEL_ROOT }}
         env:
           ANDROID_VERSION: ${{ inputs.android_version }}
           KERNEL_VERSION: ${{ inputs.kernel_version }}
-        run: bash .github/scripts/sync.sh
+        run: bash $GITHUB_WORKSPACE/.github/scripts/sync.sh
 
       - name: Save source
         if: steps.restore.outputs.cache-hit != 'true'
