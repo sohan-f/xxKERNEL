@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 
+# Helpers for applying kernel config lines to a defconfig file.
+#
+# NOTE: this file is sourced by workflow steps. Do NOT add `set -e/-u/-o
+# pipefail` here; it would leak into the calling step's shell.
+
 # Apply a kernel config line to a defconfig file idempotently.
 # Handles: CONFIG_FOO=y, CONFIG_FOO=m, CONFIG_FOO="str", and # CONFIG_FOO is not set
 apply_line() {
-    local line="$1"
-    local defconfig="$2"
+    local line="${1-}"
+    local defconfig="${2-}"
+    local key="" value="" is_disable=0
 
     # Trim leading/trailing whitespace
     line="${line#"${line%%[![:space:]]*}"}"
@@ -17,8 +23,6 @@ apply_line() {
 
     # Skip blank lines and non-config comments
     [[ -z "$line" || ( "$line" == \#* && ! "$line" =~ is[[:space:]]+not[[:space:]]+set$ ) ]] && return 0
-
-    local key value is_disable=0
 
     # Match `# CONFIG_FOO is not set`
     if [[ "$line" =~ ^#[[:space:]]*(CONFIG_[A-Za-z0-9_]+)[[:space:]]+is[[:space:]]+not[[:space:]]+set$ ]]; then
@@ -34,6 +38,13 @@ apply_line() {
         value="y"
     fi
 
+    # `key` is interpolated into grep/sed patterns below; reject anything that
+    # is not a plain identifier so pattern metacharacters can never reach them.
+    if [[ ! "$key" =~ ^[A-Za-z0-9_]+$ ]]; then
+        echo "::error::apply_line: refusing to use invalid config key: '$key'" >&2
+        return 1
+    fi
+
     # Execute disable logic for both `# CONFIG_FOO is not set` and `CONFIG_FOO=n`
     if [[ $is_disable -eq 1 ]]; then
         if grep -qE "^# ${key} is not set$" "$defconfig"; then
@@ -41,7 +52,7 @@ apply_line() {
         elif grep -qE "^${key}=" "$defconfig"; then
             sed -i "s|^${key}=.*|# ${key} is not set|" "$defconfig"
         else
-            echo "# ${key} is not set" >> "$defconfig"
+            printf '%s\n' "# ${key} is not set" >> "$defconfig"
         fi
         return 0
     fi
@@ -56,8 +67,24 @@ apply_line() {
     elif grep -qE "^# ${key} is not set$" "$defconfig"; then
         sed -i "s|^# ${key} is not set$|${key}=${escaped_val}|" "$defconfig"
     else
-        echo "${key}=${value}" >> "$defconfig"
+        printf '%s\n' "${key}=${value}" >> "$defconfig"
     fi
 }
 
+# Read CONFIG_* lines from stdin and apply each of them to the given defconfig.
+# Usage:
+#   apply_config_block "$DEFCONFIG" <<'EOF'
+#   CONFIG_FOO=y
+#   # CONFIG_BAR is not set
+#   EOF
+apply_config_block() {
+    local defconfig="${1-}"
+    local line=""
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        apply_line "$line" "$defconfig"
+    done
+}
+
 export -f apply_line
+export -f apply_config_block
