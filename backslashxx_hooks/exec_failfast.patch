@@ -1,0 +1,148 @@
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1564,9 +1564,12 @@
+ 	}
+ 	bprm->interp = bprm->filename;
+ 
+-	retval = bprm_mm_init(bprm);
+-	if (retval)
+-		goto out_free;
++	/*
++	 * bprm_mm_init() deliberately moved to the callers.  It is the whole
++	 * cost of alloc_bprm() (mm_alloc() -> mm_cachep + a pgd page, plus a
++	 * vma and a maple-tree node) and it must not run until we know the
++	 * target file can actually be opened.
++	 */
+ 	return bprm;
+ 
+ out_free:
+@@ -1850,10 +1853,22 @@
+ }
+ 
+ /*
+- * sys_execve() executes a new program.
++ * Prepare credentials, record the unsafe-exec state and open the target.
++ *
++ * This runs *before* bprm_mm_init() on purpose: do_open_execat() is the
++ * operation that actually decides whether the exec can go anywhere, and
++ * reaching it before the temporary mm exists turns an ENOENT/EACCES exec
++ * into a single path walk instead of an mm_struct + pgd page + vma +
++ * maple-tree node that free_bprm() would immediately tear down again via
++ * mmput() -> exit_mmap().
++ *
++ * Returns 0 with bprm->file populated, ->cred_guard_mutex held and
++ * current->in_execve set.  On failure everything the caller would have
++ * had to clean up has already been cleaned up, so the caller only needs
++ * free_bprm().
+  */
+-static int bprm_execve(struct linux_binprm *bprm,
+-		       int fd, struct filename *filename, int flags)
++static int bprm_prepare_open(struct linux_binprm *bprm, int fd,
++			     struct filename *filename, int flags)
+ {
+ 	struct file *file;
+ 	int retval;
+@@ -1891,6 +1906,24 @@
+ 	if (bprm->fdpath && get_close_on_exec(fd))
+ 		bprm->interp_flags |= BINPRM_FLAGS_PATH_INACCESSIBLE;
+ 
++	return 0;
++
++out_unmark:
++	sched_mm_cid_after_execve(current);
++	current->in_execve = 0;
++
++	return retval;
++}
++
++/*
++ * sys_execve() executes a new program.
++ *
++ * bprm_prepare_open() has already run, so only the binfmt handoff is left.
++ */
++static int bprm_execve(struct linux_binprm *bprm)
++{
++	int retval;
++
+ 	/* Set the unchanging part of bprm->cred */
+ 	retval = security_bprm_creds_for_exec(bprm);
+ 	if (retval)
+@@ -1919,7 +1952,6 @@
+ 	if (bprm->point_of_no_return && !fatal_signal_pending(current))
+ 		force_fatal_sig(SIGSEGV);
+ 
+-out_unmark:
+ 	sched_mm_cid_after_execve(current);
+ 	current->in_execve = 0;
+ 
+@@ -1959,6 +1991,22 @@
+ 		goto out_ret;
+ 	}
+ 
++	/*
++	 * Establish creds and open the target *before* building the
++	 * temporary exec mm.  do_open_execat() is what fails for
++	 * ENOENT/EACCES execs, and everything between here and
++	 * security_bprm_creds_for_exec() - mm creation, argv/envp counting,
++	 * argument copying, then mmput() -> exit_mmap() in free_bprm() - is
++	 * pure waste when it does.
++	 */
++	retval = bprm_prepare_open(bprm, fd, filename, flags);
++	if (retval)
++		goto out_free;
++
++	retval = bprm_mm_init(bprm);
++	if (retval)
++		goto out_free;
++
+ 	retval = count(argv, MAX_ARG_STRINGS);
+ 	if (retval == 0)
+ 		pr_warn_once("process '%s' launched '%s' with NULL argv: empty string added\n",
+@@ -2002,8 +2050,17 @@
+ 		bprm->argc = 1;
+ 	}
+ 
+-	retval = bprm_execve(bprm, fd, filename, flags);
++	retval = bprm_execve(bprm);
+ out_free:
++	/*
++	 * bprm_prepare_open() sets current->in_execve and bprm_execve()
++	 * clears it, but the intermediate failures (bprm_mm_init(),
++	 * counting, copying) jump straight here with it still set.
++	 */
++	if (current->in_execve) {
++		sched_mm_cid_after_execve(current);
++		current->in_execve = 0;
++	}
+ 	free_bprm(bprm);
+ 
+ out_ret:
+@@ -2033,6 +2090,14 @@
+ 		goto out_ret;
+ 	}
+ 
++	retval = bprm_prepare_open(bprm, fd, filename, 0);
++	if (retval)
++		goto out_free;
++
++	retval = bprm_mm_init(bprm);
++	if (retval)
++		goto out_free;
++
+ 	retval = count_strings_kernel(argv);
+ 	if (WARN_ON_ONCE(retval == 0))
+ 		retval = -EINVAL;
+@@ -2062,8 +2127,12 @@
+ 	if (retval < 0)
+ 		goto out_free;
+ 
+-	retval = bprm_execve(bprm, fd, filename, 0);
++	retval = bprm_execve(bprm);
+ out_free:
++	if (current->in_execve) {
++		sched_mm_cid_after_execve(current);
++		current->in_execve = 0;
++	}
+ 	free_bprm(bprm);
+ out_ret:
+ 	putname(filename);

@@ -269,6 +269,7 @@ jobs:
 
           cd common
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/exec_failfast.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_security_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
           cd ..
@@ -346,7 +347,7 @@ jobs:
 
           CONFIG_KSU_SHELL_HAS_SU_ALWAYS=y
           CONFIG_KSU_NOPRINTK=y
-          CONFIG_KSU_FEATURE_SULOG=y
+          CONFIG_KSU_FEATURE_SULOG=n
           CONFIG_KSU_FEATURE_ADBROOT=n
 
           CONFIG_KSU_DEBUG=n
