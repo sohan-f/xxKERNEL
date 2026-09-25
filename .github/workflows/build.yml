@@ -269,6 +269,7 @@ jobs:
 
           cd common
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/exec_failfast.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_security_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
           cd ..
