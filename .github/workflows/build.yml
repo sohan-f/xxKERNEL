@@ -390,6 +390,7 @@ jobs:
           apply_config_block "$DEFCONFIG" <<'EOF'
           CONFIG_SYSVIPC=y
           CONFIG_POSIX_MQUEUE=y
+          CONFIG_USER_NS=y
           CONFIG_IPC_NS=y
           CONFIG_PID_NS=y
           CONFIG_DEVTMPFS=y
@@ -590,6 +591,9 @@ jobs:
 
           echo "Patching use_unlikely_wrap_cpufreq.patch"
           patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/use_unlikely_wrap_cpufreq.patch"
+
+          echo "Adding CONFIG_USER_NS guard for DS"
+          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch"
 
           echo "[+] Other patches applied"
 
