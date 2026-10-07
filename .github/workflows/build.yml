@@ -384,6 +384,15 @@ jobs:
             echo "::warning::Failed to apply SYSVIPC kABI patch; it may already be applied or context mismatched"
           fi
 
+          CGROUP_PATCH="${{ github.workspace }}/droidspaces_patch/fix_cgroup_limits_kabi_6.6.patch"
+          if [ -f "$CGROUP_PATCH" ]; then
+            if ! patch -p1 -F3 --forward < "$CGROUP_PATCH"; then
+              echo "::warning::Failed to apply cgroup limits kABI patch; it may already be applied or context mismatched"
+            fi
+          else
+            echo "::warning::cgroup limits kABI patch not found: $CGROUP_PATCH"
+          fi
+
           echo "Adding Droidspaces kernel configurations..."
 
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
@@ -394,6 +403,8 @@ jobs:
           CONFIG_IPC_NS=y
           CONFIG_PID_NS=y
           CONFIG_DEVTMPFS=y
+          CONFIG_CGROUP_PIDS=y
+          CONFIG_CFS_BANDWIDTH=y
           CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
           CONFIG_NETFILTER_XT_TARGET_LOG=y
           CONFIG_NETFILTER_XT_MATCH_RECENT=y
