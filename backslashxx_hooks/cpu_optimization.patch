@@ -20,7 +20,7 @@ index 75b9d2e7..88fd1263 100644
  
  // split with ,
 -#define MODULES_TO_BLOCK "ksu,kernelsu"
-+#define MODULES_TO_BLOCK "ksu,kernelsu,moto_sched"
++#define MODULES_TO_BLOCK "ksu,kernelsu"
  
  static int ksu_prepare_new_blacklist(uintptr_t blacklist_pptr)
  {
