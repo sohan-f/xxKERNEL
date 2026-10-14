@@ -603,8 +603,8 @@ jobs:
           echo "Patching use_unlikely_wrap_cpufreq.patch"
           patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/use_unlikely_wrap_cpufreq.patch"
 
-          echo "Adding CONFIG_USER_NS guard for DS"
-          patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch"
+          # echo "Adding CONFIG_USER_NS guard for DS"
+          # patch -p1 -F3 --forward < "$KERNEL_PATCHES/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch"
 
           echo "[+] Other patches applied"
 
