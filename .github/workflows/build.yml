@@ -54,7 +54,8 @@ jobs:
   build-kernel:
     name: "6.6 (android15)"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # no timeout-minutes: full LTO link swap-rescued on this 16GB runner is slow;
+    # GH caps hosted jobs at 6h regardless.
 
     defaults:
       run:
@@ -87,6 +88,22 @@ jobs:
           rm_cmd: "rmz"
           rmz_version: "3.1.1"
           testing: false
+
+      # FULL LTO linkage needs ~12GB RSS per vmlinux link, and the autofdo dist
+      # builds plain+autofdo kernel variants as concurrent bazel actions (~2
+      # in flight). Without swap the OOM killer reaps ld.lld, then the runner
+      # agent itself, and the job dies mid-stream with zero error output.
+      # Swap goes on /mnt (ephemeral disk, large and mostly idle) so it does
+      # not compete with / where bazel-bin output lives.
+      - name: Setup swap for LTO link
+        run: |
+          sudo fallocate -l 32G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          swapon --show
+          free -h
+          df -h /mnt
 
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -540,63 +557,49 @@ jobs:
 
       - name: Compile kernel
         id: compile_kernel
-        uses: nick-fields/retry@v4
-        with:
-          shell: bash
-          timeout_minutes: 60
-          max_attempts: 3
-          retry_on: timeout
-          command: |
-            LOG_DIR="$GITHUB_WORKSPACE/build-logs"
-            ATTEMPT_FILE="$LOG_DIR/.compile-attempt"
-            mkdir -p "$LOG_DIR"
+        run: |
+          LOG_DIR="$GITHUB_WORKSPACE/build-logs"
+          mkdir -p "$LOG_DIR"
+          LOG_FILE="$LOG_DIR/compile.log"
 
-            ATTEMPT=1
-            if [ -s "$ATTEMPT_FILE" ]; then
-              read -r LAST_ATTEMPT < "$ATTEMPT_FILE"
-              if [[ "$LAST_ATTEMPT" =~ ^[0-9]+$ ]]; then
-                ATTEMPT=$((LAST_ATTEMPT + 1))
-              fi
+          set -o pipefail
+          {
+            echo "Start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "KernelSU: ${KSU_LATEST_COMMIT_DATE}"
+            set -ex
+            cd "$KERNEL_ROOT"
+
+            # Extract defconfig changes into a fragment for Kleaf/Bazel build,
+            # then restore the pristine defconfig (bazel hashes source files).
+            # Computed fresh each run; retrying from a stale attempt state
+            # (nick-fields/retry) is what previously empty-ed this fragment.
+            FRAG="common/arch/arm64/configs/ksu.fragment"
+            diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
+            cp "$DEFCONFIG.orig" "$DEFCONFIG"
+            echo "Defconfig fragment:"
+            cat "$FRAG"
+
+            FRAG_ARGS=()
+            if [ -s "$FRAG" ]; then
+              FRAG_ARGS=(--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment)
             fi
-            echo "$ATTEMPT" > "$ATTEMPT_FILE"
-            LOG_FILE="$LOG_DIR/compile-attempt-${ATTEMPT}.log"
 
-            set -o pipefail
-            {
-              echo "Attempt: $ATTEMPT"
-              echo "Start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              echo "KernelSU: ${KSU_LATEST_COMMIT_DATE}"
-              set -ex
-              cd "$KERNEL_ROOT"
+            tools/bazel build \
+                --config=fast \
+                "${FRAG_ARGS[@]}" \
+                --action_env=PATH \
+                --action_env="KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=${TARGET_CPU}" \
+                //common:kernel_aarch64_autofdo_dist || exit 1
 
-              # Extract defconfig changes into a fragment for Kleaf/Bazel build
-              FRAG="common/arch/arm64/configs/ksu.fragment"
-              diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
-              cp "$DEFCONFIG.orig" "$DEFCONFIG"
-              echo "Defconfig fragment:"
-              cat "$FRAG"
+            strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+          } 2>&1 | tee "$LOG_FILE"
 
-              FRAG_ARGS=()
-              if [ -s "$FRAG" ]; then
-                FRAG_ARGS=(--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment)
-              fi
-
-              tools/bazel build \
-                  --config=fast \
-                  "${FRAG_ARGS[@]}" \
-                  --action_env=PATH \
-                  --action_env="KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=${TARGET_CPU}" \
-                  //common:kernel_aarch64_autofdo_dist || exit 1
-
-              strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
-            } 2>&1 | tee "$LOG_FILE"
-
-            BUILD_STATUS=${PIPESTATUS[0]}
-            {
-              echo "End: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              echo "Exit: $BUILD_STATUS"
-            } >> "$LOG_FILE"
-            exit "$BUILD_STATUS"
+          BUILD_STATUS=${PIPESTATUS[0]}
+          {
+            echo "End: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "Exit: $BUILD_STATUS"
+          } >> "$LOG_FILE"
+          exit "$BUILD_STATUS"
 
       - name: Prepare AnyKernel3
         working-directory: ${{ env.ANYKERNEL3 }}
