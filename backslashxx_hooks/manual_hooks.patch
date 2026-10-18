@@ -8,7 +8,7 @@ index 8dc93215b..bb208af28 100644
 
 +#ifdef CONFIG_KSU
 +	extern int ksu_handle_execveat(int *, struct filename **, void *, void *, int *);
-+	[[clang::always_inline]] ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
++	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
 +#endif
 +
  	if (IS_ERR(filename))
@@ -24,7 +24,7 @@ index 0641cb3fd..b7cde25e8 100644
  {
 +#ifdef CONFIG_KSU
 +	extern int ksu_handle_faccessat(int *, const char __user **, int *, int *);
-+	[[clang::always_inline]] ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
++	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
 +#endif
  	return do_faccessat(dfd, filename, mode, 0);
  }
@@ -39,7 +39,7 @@ index 517fa4ed8..4a2f5d4b8 100644
 
 +#ifdef CONFIG_KSU
 +	extern int ksu_handle_stat(int *, const char __user **, int *);
-+	[[clang::always_inline]] ksu_handle_stat(&dfd, &filename, &flag);
++	ksu_handle_stat(&dfd, &filename, &flag);
 +#endif
 +
  	error = vfs_fstatat(dfd, filename, &stat, flag);
@@ -81,7 +81,7 @@ index 517fa4ed8..4a2f5d4b8 100644
 
 +#ifdef CONFIG_KSU // for 32-bit
 +	extern int ksu_handle_stat(int *, const char __user **, int *);
-+	[[clang::always_inline]] ksu_handle_stat(&dfd, &filename, &flag);
++	ksu_handle_stat(&dfd, &filename, &flag);
 +#endif
 +
  	error = vfs_fstatat(dfd, filename, &stat, flag);

@@ -54,8 +54,8 @@ jobs:
   build-kernel:
     name: "6.6 (android15)"
     runs-on: ubuntu-latest
-    # no timeout-minutes: full LTO link swap-rescued on this 16GB runner is slow;
-    # GH caps hosted jobs at 6h regardless.
+    # no timeout-minutes: GH caps hosted jobs at 6h regardless; a thin LTO
+    # build+link fits in ~40 min against that ceiling.
 
     defaults:
       run:
@@ -89,12 +89,10 @@ jobs:
           rmz_version: "3.1.1"
           testing: false
 
-      # FULL LTO linkage needs ~12GB RSS per vmlinux link, and the autofdo dist
-      # builds plain+autofdo kernel variants as concurrent bazel actions (~2
-      # in flight). Without swap the OOM killer reaps ld.lld, then the runner
-      # agent itself, and the job dies mid-stream with zero error output.
-      # Swap goes on /mnt (ephemeral disk, large and mostly idle) so it does
-      # not compete with / where bazel-bin output lives.
+      # Kept as headroom: with thin LTO the ld.lld link peaks around
+      # 2-4GB RSS, well under the 16GB runner, but leaving 32GB of swap
+      # on the idle /mnt ephemeral disk costs nothing and keeps a fat
+      # concurrent-link spike from ever OOM-killing ld.lld or the agent.
       - name: Setup swap for LTO link
         run: |
           sudo fallocate -l 32G /mnt/swapfile
@@ -300,7 +298,7 @@ jobs:
           CONFIG_CPU_THERMAL=y
           CONFIG_DEVFREQ_THERMAL=y
 
-          CONFIG_LTO_CLANG_FULL=y
+          CONFIG_LTO_CLANG_THIN=y
 
           CONFIG_LRU_GEN=y
           CONFIG_LRU_GEN_ENABLED=y
