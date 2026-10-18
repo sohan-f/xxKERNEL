@@ -1,0 +1,13 @@
+diff --git a/Makefile b/Makefile
+index 439072229..d689b1e93 100644
+--- a/Makefile
++++ b/Makefile
+@@ -982,6 +982,8 @@ else
+ CC_FLAGS_LTO	+= -fvisibility=default
+ endif
+ 
++KBUILD_LDFLAGS += --lto-O3
++
+ # Limit inlining across translation units to reduce binary size
+ KBUILD_LDFLAGS += -mllvm -import-instr-limit=5
+ 

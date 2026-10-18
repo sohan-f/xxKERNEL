@@ -37,6 +37,21 @@ on:
         required: true
         type: boolean
         default: false
+      lto_o3:
+        description: "Add --lto-O3 to the LTO link (experimental: larger vmlinux and longer links)"
+        required: true
+        type: boolean
+        default: false
+      use_cgroup_limits:
+        description: "Enable CFS bandwidth + pids controllers together with the cgroup limits kABI patch"
+        required: true
+        type: boolean
+        default: false
+
+      build_time:
+        description: "Kernel build time hardcoded into the version string, e.g. 'Sun Dec 01 08:10:00 UTC 2024' (blank = now)"
+        required: false
+        type: string
 
 env:
   ANDROID_VERSION: android15
@@ -54,9 +69,6 @@ jobs:
   build-kernel:
     name: "6.6 (android15)"
     runs-on: ubuntu-latest
-    # no timeout-minutes: GH caps hosted jobs at 6h regardless; a thin LTO
-    # build+link fits in ~40 min against that ceiling.
-
     defaults:
       run:
         shell: bash
@@ -73,6 +85,9 @@ jobs:
           echo "Droidspaces: ${{ inputs.use_droidspaces }}"
           echo "NTSync: ${{ inputs.droidspaces_ntsync }}"
           echo "Stock config spoofing: ${{ inputs.use_stock_config_spoof }}"
+          echo "LTO -O3 link: ${{ inputs.lto_o3 }}"
+          echo "Cgroup limits: ${{ inputs.use_cgroup_limits }}"
+          echo "Build time: ${{ inputs.build_time }}"
 
       - name: Clean up disk space
         uses: endersonmenezes/free-disk-space@v3
@@ -89,10 +104,6 @@ jobs:
           rmz_version: "3.1.1"
           testing: false
 
-      # Kept as headroom: with thin LTO the ld.lld link peaks around
-      # 2-4GB RSS, well under the 16GB runner, but leaving 32GB of swap
-      # on the idle /mnt ephemeral disk costs nothing and keeps a fat
-      # concurrent-link spike from ever OOM-killing ld.lld or the agent.
       - name: Setup swap for LTO link
         run: |
           sudo fallocate -l 32G /mnt/swapfile
@@ -127,9 +138,6 @@ jobs:
 
       - name: Resolve kernel manifest HEAD
         run: |
-          # The source cache is keyed on this hash, so it must be the same
-          # branch that `repo init` syncs below — keying on any other branch
-          # would keep serving stale cached kernel sources.
           MANIFEST_HASH=$(git ls-remote https://android.googlesource.com/kernel/manifest \
             "refs/heads/${KERNEL_BRANCH}" | awk -F'\t' '{print substr($1, 1, 12)}')
           echo "MANIFEST_HASH=${MANIFEST_HASH}" >> "$GITHUB_ENV"
@@ -276,9 +284,7 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
 
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_AUTOFDO_CLANG=y
 
-          CONFIG_HZ_300=y
           CONFIG_PREEMPT=y
           CONFIG_NO_HZ_IDLE=y
           CONFIG_CPU_IDLE=y
@@ -298,10 +304,8 @@ jobs:
           CONFIG_CPU_THERMAL=y
           CONFIG_DEVFREQ_THERMAL=y
 
-          CONFIG_LTO_CLANG_THIN=y
+          CONFIG_LTO_CLANG_FULL=y
 
-          CONFIG_LRU_GEN=y
-          CONFIG_LRU_GEN_ENABLED=y
           CONFIG_F2FS_FS_COMPRESSION=y
 
           CONFIG_BPF_JIT=y
@@ -320,7 +324,6 @@ jobs:
 
           CONFIG_KSU_ENABLE_FULL_UID_CHECKS=n
 
-          CONFIG_KSU_SHELL_HAS_SU_ALWAYS=y
           CONFIG_KSU_NOPRINTK=y
           CONFIG_KSU_FEATURE_SULOG=n
           CONFIG_KSU_FEATURE_ADBROOT=n
@@ -331,6 +334,32 @@ jobs:
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: Enable LTO -O3 link
+        if: inputs.lto_o3
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/lto_o3.patch"
+
+      - name: Fix cgroup limits kABI
+        if: inputs.use_cgroup_limits
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          CGROUP_PATCH="${{ github.workspace }}/droidspaces_patch/fix_cgroup_limits_kabi_6.6.patch"
+
+          if [ -f "$CGROUP_PATCH" ]; then
+            if ! patch -p1 -F3 --forward < "$CGROUP_PATCH"; then
+              echo "::warning::cgroup limits kABI patch did not apply; already applied or context mismatch"
+            fi
+          else
+            echo "::warning::cgroup limits kABI patch missing: $CGROUP_PATCH"
+          fi
+
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          apply_config_block "$DEFCONFIG" <<'EOF'
+          CONFIG_CFS_BANDWIDTH=y
+          CONFIG_CGROUP_PIDS=y
+          EOF
 
       - name: Integrate Droidspaces
         if: inputs.use_droidspaces
@@ -344,15 +373,6 @@ jobs:
             echo "::warning::SYSVIPC kABI patch did not apply; already applied or context mismatch"
           fi
 
-          CGROUP_PATCH="${{ github.workspace }}/droidspaces_patch/fix_cgroup_limits_kabi_6.6.patch"
-          if [ -f "$CGROUP_PATCH" ]; then
-            if ! patch -p1 -F3 --forward < "$CGROUP_PATCH"; then
-              echo "::warning::cgroup limits kABI patch did not apply; already applied or context mismatch"
-            fi
-          else
-            echo "::warning::cgroup limits kABI patch missing: $CGROUP_PATCH"
-          fi
-
           source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
           apply_config_block "$DEFCONFIG" <<'EOF'
           CONFIG_SYSVIPC=y
@@ -361,8 +381,6 @@ jobs:
           CONFIG_IPC_NS=y
           CONFIG_PID_NS=y
           CONFIG_DEVTMPFS=y
-          CONFIG_CGROUP_PIDS=y
-          CONFIG_CFS_BANDWIDTH=y
           CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
           CONFIG_NETFILTER_XT_TARGET_LOG=y
           CONFIG_NETFILTER_XT_MATCH_RECENT=y
@@ -545,6 +563,42 @@ jobs:
 
           echo "Expected version: $(make -s kernelversion)"
 
+      - name: Set custom build time
+        env:
+          INPUT_TIME: ${{ inputs.build_time }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then
+            TIME_REGEX='^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0[1-9]|[12][0-9]|3[01]) ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] UTC [0-9]{4}$'
+            if [[ ! "$INPUT_TIME" =~ $TIME_REGEX ]]; then
+              echo "::warning title=Build time format error::Custom build time must be formatted like 'Sun Dec 01 08:10:00 UTC 2024'. Please remove extra prefixes and use a two-digit day."
+              exit 1
+            fi
+
+            NORMALIZED_TIME="$(LC_ALL=C TZ=UTC date -u -d "$INPUT_TIME" +'%a %b %d %T UTC %Y' 2>/dev/null || true)"
+            if [[ "$NORMALIZED_TIME" != "$INPUT_TIME" ]]; then
+              echo "::warning title=Invalid build time::Custom build time cannot be parsed as valid UTC time, or the day of the week does not match the date."
+              exit 1
+            fi
+
+            DATESTR="$INPUT_TIME"
+          else
+            DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"
+          fi
+
+          echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
+
+          f="$KERNEL_ROOT/common/scripts/mkcompile_h"
+          if [ -f "$f" ]; then
+            echo "Applying 6.x mkcompile_h patch: $f"
+            if grep -q 'UTS_VERSION=' "$f"; then
+              perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+            else
+              perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
+            fi
+          fi
+
       - name: Verify kernel version
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
@@ -567,10 +621,6 @@ jobs:
             set -ex
             cd "$KERNEL_ROOT"
 
-            # Extract defconfig changes into a fragment for Kleaf/Bazel build,
-            # then restore the pristine defconfig (bazel hashes source files).
-            # Computed fresh each run; retrying from a stale attempt state
-            # (nick-fields/retry) is what previously empty-ed this fragment.
             FRAG="common/arch/arm64/configs/ksu.fragment"
             diff "$DEFCONFIG.orig" "$DEFCONFIG" | grep '^>' | sed 's/^> //; s/^[[:space:]]*//' > "$FRAG" || true
             cp "$DEFCONFIG.orig" "$DEFCONFIG"
@@ -587,7 +637,7 @@ jobs:
                 "${FRAG_ARGS[@]}" \
                 --action_env=PATH \
                 --action_env="KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=${TARGET_CPU}" \
-                //common:kernel_aarch64_autofdo_dist || exit 1
+                //common:kernel_aarch64_dist || exit 1
 
             strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
           } 2>&1 | tee "$LOG_FILE"
