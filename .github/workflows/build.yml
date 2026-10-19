@@ -318,8 +318,6 @@ jobs:
           CONFIG_CPU_THERMAL=y
           CONFIG_DEVFREQ_THERMAL=y
 
-          CONFIG_LTO_CLANG_THIN=y
-
           CONFIG_F2FS_FS_COMPRESSION=y
 
           CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
@@ -333,13 +331,6 @@ jobs:
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
-
-      - name: Use full LTO
-        if: inputs.lto_full
-        run: |
-          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          apply_line "# CONFIG_LTO_CLANG_THIN is not set" "$DEFCONFIG"
-          apply_line "CONFIG_LTO_CLANG_FULL=y" "$DEFCONFIG"
 
       - name: Keep oopses visible
         if: inputs.panic_visible
@@ -645,8 +636,14 @@ jobs:
               FRAG_ARGS=(--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment)
             fi
 
+            LTO_MODE=thin
+            if [ "${{ inputs.lto_full }}" = "true" ]; then
+              LTO_MODE=full
+            fi
+
             tools/bazel build \
                 --config=fast \
+                "--lto=${LTO_MODE}" \
                 "${FRAG_ARGS[@]}" \
                 --action_env=PATH \
                 --action_env="KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=${TARGET_CPU}" \
