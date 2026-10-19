@@ -38,23 +38,12 @@ on:
         type: boolean
         default: false
       lto_o3:
-        description: "Add --lto-O3 to the LTO link (experimental: larger vmlinux and longer links)"
+        description: "Add --lto-O3 to the LTO link (experimental: known not to boot on this tree, leave off)"
         required: true
         type: boolean
         default: false
       use_cgroup_limits:
         description: "Enable CFS bandwidth + pids controllers together with the cgroup limits kABI patch"
-        required: true
-        type: boolean
-        default: false
-
-      lto_full:
-        description: "Use full LTO instead of thin LTO (experimental: for bisecting the full LTO bootloop)"
-        required: true
-        type: boolean
-        default: false
-      panic_visible:
-        description: "Keep panic_on_oops off and let a panic time out, so oopses print instead of rebooting silently"
         required: true
         type: boolean
         default: false
@@ -98,13 +87,9 @@ jobs:
           echo "Stock config spoofing: ${{ inputs.use_stock_config_spoof }}"
           echo "LTO -O3 link: ${{ inputs.lto_o3 }}"
           echo "Cgroup limits: ${{ inputs.use_cgroup_limits }}"
-          echo "Full LTO: ${{ inputs.lto_full }}"
-          echo "Panic visible: ${{ inputs.panic_visible }}"
           echo "Build time: ${{ inputs.build_time }}"
 
           SUFFIX=""
-          if [ "${{ inputs.lto_full }}" = "true" ]; then SUFFIX="${SUFFIX}-lto-full"; fi
-          if [ "${{ inputs.panic_visible }}" = "true" ]; then SUFFIX="${SUFFIX}-panic-visible"; fi
           echo "FLAVOR_SUFFIX=${SUFFIX}" >> "$GITHUB_ENV"
           echo "Flavor: ${SUFFIX:-default}"
 
@@ -331,13 +316,6 @@ jobs:
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
-
-      - name: Keep oopses visible
-        if: inputs.panic_visible
-        run: |
-          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
-          apply_line "# CONFIG_PANIC_ON_OOPS is not set" "$DEFCONFIG"
-          apply_line "CONFIG_PANIC_TIMEOUT=15" "$DEFCONFIG"
 
       - name: Fix KASAN MTE inline asm
         working-directory: ${{ env.KERNEL_ROOT }}/common
@@ -645,14 +623,9 @@ jobs:
               FRAG_ARGS=(--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment)
             fi
 
-            LTO_MODE=thin
-            if [ "${{ inputs.lto_full }}" = "true" ]; then
-              LTO_MODE=full
-            fi
-
             tools/bazel build \
                 --config=fast \
-                "--lto=${LTO_MODE}" \
+                --lto=thin \
                 "${FRAG_ARGS[@]}" \
                 --action_env=PATH \
                 --action_env="KCFLAGS=-march=armv8.2-a+crypto+fp16+dotprod+rcpc+dcpop -mtune=${TARGET_CPU}" \
