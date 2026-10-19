@@ -339,6 +339,15 @@ jobs:
           apply_line "# CONFIG_PANIC_ON_OOPS is not set" "$DEFCONFIG"
           apply_line "CONFIG_PANIC_TIMEOUT=15" "$DEFCONFIG"
 
+      - name: Fix KASAN MTE inline asm
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          FIX="${{ github.workspace }}/kernel_fixes/kasan_mte_volatile.patch"
+
+          if ! patch -p1 --forward -r - < "$FIX"; then
+            patch -p1 --dry-run --reverse -r - < "$FIX"
+          fi
+
       - name: Enable LTO -O3 link
         if: inputs.lto_o3
         working-directory: ${{ env.KERNEL_ROOT }}/common
