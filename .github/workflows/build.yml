@@ -299,7 +299,7 @@ jobs:
           CONFIG_CPU_THERMAL=y
           CONFIG_DEVFREQ_THERMAL=y
 
-          CONFIG_LTO_CLANG_FULL=y
+          CONFIG_LTO_CLANG_THIN=y
 
           CONFIG_F2FS_FS_COMPRESSION=y
 
