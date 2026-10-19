@@ -253,9 +253,9 @@ jobs:
           curl -fLSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s "$BRANCH"
 
           cd common
-          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
+          # patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/exec_failfast.patch"
-          patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_security_hooks.patch"
+          # patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_security_hooks.patch"
           patch -p1 < "${{ github.workspace }}/backslashxx_hooks/thermal_patch.patch"
           cd ..
 
@@ -283,8 +283,6 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
 
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-
           CONFIG_PREEMPT=y
           CONFIG_NO_HZ_IDLE=y
           CONFIG_CPU_IDLE=y
@@ -296,9 +294,6 @@ jobs:
           CONFIG_UCLAMP_TASK=y
           CONFIG_UCLAMP_TASK_GROUP=y
 
-          CONFIG_SLUB=y
-          CONFIG_SLUB_CPU_PARTIAL=y
-
           CONFIG_PM_AUTOSLEEP=y
           CONFIG_PM_WAKELOCKS=y
           CONFIG_CPU_THERMAL=y
@@ -308,21 +303,7 @@ jobs:
 
           CONFIG_F2FS_FS_COMPRESSION=y
 
-          CONFIG_BPF_JIT=y
-          CONFIG_BPF_JIT_ALWAYS_ON=y
-
-          CONFIG_SECURITY_SELINUX=y
-          CONFIG_SECCOMP=y
-          CONFIG_JUMP_LABEL=y
-
-          CONFIG_KSU_LSM_SECURITY_HOOKS=n
-
-          CONFIG_KSU_TAMPER_SYSCALL_TABLE=n
-          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=n
-
-          CONFIG_KSU_KPROBES_KSUD=n
-
-          CONFIG_KSU_ENABLE_FULL_UID_CHECKS=n
+          CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y
 
           CONFIG_KSU_NOPRINTK=y
           CONFIG_KSU_FEATURE_SULOG=n
@@ -330,7 +311,6 @@ jobs:
 
           CONFIG_KSU_DEBUG=n
           CONFIG_KSU_HOSTSREDIRECT=n
-          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=n
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
