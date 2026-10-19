@@ -48,6 +48,17 @@ on:
         type: boolean
         default: false
 
+      lto_full:
+        description: "Use full LTO instead of thin LTO (experimental: for bisecting the full LTO bootloop)"
+        required: true
+        type: boolean
+        default: false
+      panic_visible:
+        description: "Keep panic_on_oops off and let a panic time out, so oopses print instead of rebooting silently"
+        required: true
+        type: boolean
+        default: false
+
       build_time:
         description: "Kernel build time hardcoded into the version string, e.g. 'Sun Dec 01 08:10:00 UTC 2024' (blank = now)"
         required: false
@@ -87,7 +98,15 @@ jobs:
           echo "Stock config spoofing: ${{ inputs.use_stock_config_spoof }}"
           echo "LTO -O3 link: ${{ inputs.lto_o3 }}"
           echo "Cgroup limits: ${{ inputs.use_cgroup_limits }}"
+          echo "Full LTO: ${{ inputs.lto_full }}"
+          echo "Panic visible: ${{ inputs.panic_visible }}"
           echo "Build time: ${{ inputs.build_time }}"
+
+          SUFFIX=""
+          if [ "${{ inputs.lto_full }}" = "true" ]; then SUFFIX="${SUFFIX}-lto-full"; fi
+          if [ "${{ inputs.panic_visible }}" = "true" ]; then SUFFIX="${SUFFIX}-panic-visible"; fi
+          echo "FLAVOR_SUFFIX=${SUFFIX}" >> "$GITHUB_ENV"
+          echo "Flavor: ${SUFFIX:-default}"
 
       - name: Clean up disk space
         uses: endersonmenezes/free-disk-space@v3
@@ -314,6 +333,20 @@ jobs:
           EOF
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: Use full LTO
+        if: inputs.lto_full
+        run: |
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          apply_line "# CONFIG_LTO_CLANG_THIN is not set" "$DEFCONFIG"
+          apply_line "CONFIG_LTO_CLANG_FULL=y" "$DEFCONFIG"
+
+      - name: Keep oopses visible
+        if: inputs.panic_visible
+        run: |
+          source "${{ github.workspace }}/.github/scripts/kernel-config.sh"
+          apply_line "# CONFIG_PANIC_ON_OOPS is not set" "$DEFCONFIG"
+          apply_line "CONFIG_PANIC_TIMEOUT=15" "$DEFCONFIG"
 
       - name: Enable LTO -O3 link
         if: inputs.lto_o3
@@ -638,7 +671,7 @@ jobs:
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.${{ env.KERNEL_SUBLEVEL }}-AnyKernel3
+          name: ${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.${{ env.KERNEL_SUBLEVEL }}-AnyKernel3${{ env.FLAVOR_SUFFIX }}
           path: |
             ${{ env.ANYKERNEL3 }}/*
           if-no-files-found: error
