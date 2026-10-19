@@ -53,6 +53,45 @@ on:
         required: false
         type: string
 
+  workflow_call:
+    inputs:
+      use_bbg:
+        description: "Enable BBG anti-brick protection"
+        required: true
+        type: boolean
+      use_networking:
+        description: "Enable BBRv3 networking"
+        required: true
+        type: boolean
+      use_perf:
+        description: "Enable performance patches"
+        required: true
+        type: boolean
+      use_droidspaces:
+        description: "Enable Droidspaces"
+        required: true
+        type: boolean
+      droidspaces_ntsync:
+        description: "Enable NTSync (requires Droidspaces)"
+        required: true
+        type: boolean
+      use_stock_config_spoof:
+        description: "Use stock_defconfig for the embedded kernel config"
+        required: true
+        type: boolean
+      lto_o3:
+        description: "Add --lto-O3 to the LTO link (experimental: known not to boot on this tree, leave off)"
+        required: true
+        type: boolean
+      use_cgroup_limits:
+        description: "Enable CFS bandwidth + pids controllers together with the cgroup limits kABI patch"
+        required: true
+        type: boolean
+      build_time:
+        description: "Kernel build time hardcoded into the version string, e.g. 'Sun Dec 01 08:10:00 UTC 2024' (blank = now)"
+        required: false
+        type: string
+
 env:
   ANDROID_VERSION: android15
   KERNEL_VERSION: "6.6"

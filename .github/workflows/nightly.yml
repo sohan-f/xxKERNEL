@@ -1,0 +1,96 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    name: "nightly build"
+    uses: ./.github/workflows/build.yml
+    # keep these values in sync with the workflow_dispatch defaults in build.yml
+    with:
+      use_bbg: true
+      use_networking: true
+      use_perf: true
+      use_droidspaces: true
+      droidspaces_ntsync: false
+      use_stock_config_spoof: false
+      lto_o3: false
+      use_cgroup_limits: false
+      build_time: ""
+
+  release:
+    name: "nightly release"
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Package the AnyKernel3 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern "*AnyKernel3*" --dir dist
+
+          mapfile -t dirs < <(find dist -mindepth 1 -maxdepth 1 -type d)
+          if [[ ${#dirs[@]} -ne 1 ]]; then
+            echo "::error::expected exactly one AnyKernel3 artifact, found ${#dirs[@]}"
+            find dist -maxdepth 2
+            exit 1
+          fi
+
+          name="$(basename "${dirs[0]}")"
+          asset="$GITHUB_WORKSPACE/$name.zip"
+          ( cd "${dirs[0]}" && zip -qr "$asset" . )
+
+          for required in anykernel.sh Image; do
+            unzip -Z1 "$asset" | grep -qx "$required" \
+              || { echo "::error::$required is missing from the root of $name.zip"; exit 1; }
+          done
+
+          {
+            echo "ASSET_NAME=$name.zip"
+            echo "ASSET_PATH=$asset"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="nightly"
+          stamp="$(date -u -d '+6 hours' '+%Y-%m-%d %H:%M') +06:00"
+          title="${ASSET_NAME%.zip} · $stamp"
+          notes="$(printf '%s\n' \
+            "Automated nightly build of \`${ASSET_NAME%.zip}\` from \`${GITHUB_SHA}\`." \
+            "" \
+            "- Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "- Settings: the default dispatch settings (thin LTO, BBG, BBRv3, performance patches, Droidspaces)" \
+            "- Schedule: 03:00 +06:00 (21:00 UTC) daily; GitHub can start scheduled runs late under load.")"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes" --prerelease --target "$GITHUB_SHA"
+          fi
+
+          gh release upload "$tag" "$ASSET_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            while read -r stale; do
+              if [[ "$stale" != "$ASSET_NAME" ]]; then
+                gh release delete-asset "$tag" "$stale" --repo "$GITHUB_REPOSITORY" --yes
+              fi
+            done
