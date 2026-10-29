@@ -259,6 +259,26 @@ jobs:
       - name: Backup baseline defconfig
         run: cp "$DEFCONFIG" "$DEFCONFIG.orig"
 
+      - name: Enable CP210x USB serial module
+        run: |
+          source "$GITHUB_WORKSPACE/.github/scripts/kernel-config.sh"
+          apply_line "CONFIG_USB_SERIAL_CP210X=m" "$DEFCONFIG"
+          grep -E '^CONFIG_USB_SERIAL(=|_CP210X=)' "$DEFCONFIG"
+
+      - name: Declare cp210x module out
+        run: |
+          set -euo pipefail
+          MODULES_BZL="$KERNEL_ROOT/common/modules.bzl"
+          if ! grep -q '"drivers/usb/serial/cp210x.ko"' "$MODULES_BZL"; then
+            perl -0pi -e 's{(\n    "drivers/usb/serial/ftdi_sio[.]ko",)}{\n    "drivers/usb/serial/cp210x.ko",$1}' "$MODULES_BZL"
+          fi
+          matches="$(grep -c '"drivers/usb/serial/cp210x.ko"' "$MODULES_BZL" || true)"
+          if [ "${matches:-0}" -ne 1 ]; then
+            echo "::error::cp210x.ko is not declared in $MODULES_BZL (matches: ${matches:-0})"
+            exit 1
+          fi
+          grep -n -B1 -A1 'cp210x' "$MODULES_BZL"
+
       - name: Apply Stock Config spoofing
         if: inputs.use_stock_config_spoof
         run: |
@@ -679,6 +699,46 @@ jobs:
             echo "Exit: $BUILD_STATUS"
           } >> "$LOG_FILE"
           exit "$BUILD_STATUS"
+
+      - name: Stage USB serial modules
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/usb-serial-modules"
+          ARCHIVE="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64/modules_staging_dir.tar.gz"
+          MODULES="usbserial.ko cp210x.ko"
+          mkdir -p "$OUT"
+
+          for mod in $MODULES; do
+            entry=""
+            if [ -f "$ARCHIVE" ]; then
+              entry="$(tar tzf "$ARCHIVE" | grep -E "/kernel/drivers/usb/serial/${mod}$" | head -1 || true)"
+            fi
+            if [ -n "$entry" ]; then
+              tar xzf "$ARCHIVE" -C "$OUT" "$entry"
+              mv "$OUT/$entry" "$OUT/$mod"
+              continue
+            fi
+            found="$(find "$KERNEL_ROOT/bazel-bin" -type f -name "$mod" 2>/dev/null | head -1 || true)"
+            if [ -z "$found" ]; then
+              echo "::error::$mod not produced (staging archive: $ARCHIVE)"
+              exit 1
+            fi
+            cp "$found" "$OUT/$mod"
+          done
+
+          ls -l "$OUT"
+          for mod in $MODULES; do
+            echo "== $mod"
+            readelf -p .modinfo "$OUT/$mod" | grep -E 'vermagic|depends|name='
+          done
+
+      - name: Upload USB serial modules
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.${{ env.KERNEL_SUBLEVEL }}-usb-serial-ko${{ env.FLAVOR_SUFFIX }}
+          path: ${{ github.workspace }}/usb-serial-modules/*.ko
+          if-no-files-found: error
+          compression-level: 9
 
       - name: Prepare AnyKernel3
         working-directory: ${{ env.ANYKERNEL3 }}
