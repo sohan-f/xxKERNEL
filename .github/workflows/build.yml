@@ -311,9 +311,9 @@ jobs:
       - name: Integrate KernelSU
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          BRANCH="master"
+          BRANCH="main"
 
-          curl -fLSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s "$BRANCH"
+          curl -fLSs "https://raw.githubusercontent.com/sohan-f/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s "$BRANCH"
 
           cd common
           # patch -p1 < "${{ github.workspace }}/backslashxx_hooks/manual_hooks.patch"
